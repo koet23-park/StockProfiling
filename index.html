@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📱 Stock Profiling Dashboard</title>
+<!-- xlsx-js-style: 스타일드 Excel 다운로드용 (XLSXStyle 변수에 저장) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
+<script>window.XLSXStyle = window.XLSX;</script>
+<!-- xlsx 원본: DRM 호환 파일 읽기용 (XLSX 변수로 복원) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+:root {
+  --blue-dark:#0D47A1; --blue:#1565C0; --blue-light:#1976D2;
+  --green:#2E7D32; --green-bg:#E8F5E9;
+  --red:#C62828; --red-bg:#FFEBEE;
+  --yellow:#F57F17; --yellow-bg:#FFFDE7;
+  --gray:#F0F4F8; --border:#E2E8F0;
+  --text:#1A202C; --text-sub:#64748B;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Segoe UI',sans-serif;background:var(--gray);color:var(--text);}
+
+/* ── Header ── */
+header{
+  background:linear-gradient(135deg,var(--blue-dark),var(--blue-light));
+  color:white;padding:16px 32px;
+  display:flex;align-items:center;gap:16px;
+  box-shadow:0 2px 12px rgba(0,0,0,.18);
+}
+header .logo{font-size:26px;}
+header .title-wrap{flex:1;}
+header h1{font-size:19px;font-weight:700;}
+header p{font-size:11px;opacity:.75;margin-top:1px;}
+
+/* ── Page Nav (헤더 내 탭) ── */
+.page-nav{display:flex;gap:4px;}
+.page-nav button{
+  padding:7px 18px;border:none;border-radius:8px;font-size:13px;font-weight:600;
+  cursor:pointer;transition:all .15s;background:rgba(255,255,255,.15);color:rgba(255,255,255,.8);
+}
+.page-nav button.active{background:white;color:var(--blue);}
+.page-nav button:hover:not(.active){background:rgba(255,255,255,.25);color:white;}
+
+/* ── Page sections ── */
+.page{display:none;} .page.active{display:block;}
+main{max-width:1280px;margin:0 auto;padding:26px 24px;}
+
+/* ── Upload zone ── */
+.upload-zone{
+  border:2.5px dashed #93C5FD;border-radius:16px;
+  background:white;padding:32px 48px;text-align:center;
+  cursor:pointer;transition:all .2s;
+}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--blue);background:#EFF6FF;}
+.upload-zone .icon{font-size:44px;margin-bottom:10px;}
+.upload-zone h2{font-size:16px;color:#374151;margin-bottom:5px;}
+.upload-zone p{font-size:13px;color:var(--text-sub);}
+#fileInput{display:none;}
+.input-methods{display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap;}
+.method-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:3px 11px;border-radius:99px;font-size:11px;font-weight:600;
+  background:#EFF6FF;color:var(--blue);border:1px solid #BFDBFE;
+}
+.or-divider{
+  display:flex;align-items:center;gap:12px;margin:12px 0;
+  color:var(--text-sub);font-size:12px;font-weight:600;
+}
+.or-divider::before,.or-divider::after{content:'';flex:1;height:1px;background:var(--border);}
+.paste-area{border:1.5px solid var(--border);border-radius:12px;background:white;overflow:hidden;transition:border-color .2s;}
+.paste-area:focus-within{border-color:var(--blue);}
+.paste-area-header{
+  background:#F8FAFC;padding:8px 14px;font-size:12px;font-weight:600;color:var(--text-sub);
+  border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;
+}
+#pasteInput{width:100%;min-height:80px;padding:10px 14px;font-size:12px;font-family:'Consolas',monospace;border:none;outline:none;resize:vertical;background:white;}
+.paste-btn{margin:6px 14px 10px;padding:7px 18px;background:var(--blue);color:white;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;}
+.paste-btn:hover{background:var(--blue-light);}
+
+/* ── Result summary line ── */
+.result-summary{
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;
+  background:white;border-radius:12px;padding:12px 18px;
+  box-shadow:0 1px 4px rgba(0,0,0,.07);margin:18px 0 12px;font-size:13px;
+}
+.result-summary .sum-filename{font-weight:700;color:var(--text);}
+.result-summary .sum-total{color:var(--text-sub);}
+.result-summary .sum-ok{font-weight:700;color:var(--green);}
+.result-summary .sum-err{font-weight:700;color:var(--red);}
+.filter-btns{display:flex;gap:6px;}
+.filter-btn{
+  padding:4px 12px;border:1.5px solid var(--border);border-radius:99px;
+  font-size:11px;font-weight:600;cursor:pointer;background:white;color:var(--text-sub);
+  transition:all .15s;
+}
+.filter-btn.active{background:var(--blue);color:white;border-color:var(--blue);}
+.filter-btn:hover:not(.active){border-color:var(--blue);color:var(--blue);}
+
+/* ── Data table (Excel 동일 스타일) ── */
+.table-wrap{overflow:auto;max-height:calc(100vh - 280px);border-radius:4px;border:1px solid #BDBDBD;}
+table{width:100%;border-collapse:collapse;font-size:11px;background:white;font-family:'Calibri','Segoe UI',sans-serif;}
+th,td{border:1px solid #D0D0D0;padding:3px 5px;white-space:nowrap;}
+th{background:white;color:#000;font-weight:700;text-align:center;position:sticky;top:0;z-index:2;}
+td{color:#000;}
+
+/* Confidential 헤더 행 */
+th.th-conf{background:white;color:#595959;font-size:10px;font-style:italic;font-weight:400;text-align:left;padding:2px 6px;}
+
+/* 정보 열 (grade 전 첫 번째 구간): 원본 Excel EFF8FF 배경 */
+td.cell-info{background:#EFF8FF;}
+tr:hover td.cell-info{background:#E2F2FF;}
+
+/* Grade 열 */
+td.grade-cell{text-align:center;font-size:11px;}
+td.grade-ok-y{}                                        /* 정상 Y: 색 없음 */
+td.grade-ok-n{color:#9E9E9E;}                          /* 정상 N: 연회색 */
+td.grade-err-missing{background:#FFC000;color:#000;font-weight:700;} /* 오류: 황금색 */
+td.grade-err-extra {background:#FFC000;color:#000;font-weight:700;}  /* 오류: 황금색 */
+
+/* 등급 그룹 헤더 */
+th.th-group-label{text-align:center;font-size:11px;font-weight:700;}
+th.th-grade-sub{text-align:center;font-size:10px;font-weight:600;}
+
+/* 결과 배지 */
+.badge-ok{display:inline-block;padding:1px 8px;border-radius:3px;font-size:10px;font-weight:700;background:#E8F5E9;color:#2E7D32;}
+.badge-err{display:inline-block;padding:1px 8px;border-radius:3px;font-size:10px;font-weight:700;background:#FFF8E1;color:#E65100;}
+
+/* 열번호 / 검증 열 */
+td.row-num,th.row-num{text-align:right;color:#9E9E9E;font-weight:400;width:34px;min-width:34px;background:white!important;font-size:10px;}
+td.row-result,th.row-result{text-align:center;width:52px;min-width:52px;background:white!important;}
+
+/* ── Download btn ── */
+.dl-btn{display:block;width:100%;margin-top:18px;padding:13px;background:var(--blue);color:white;text-align:center;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;transition:background .15s;}
+.dl-btn:hover{background:var(--blue-light);}
+
+/* ── Progress ── */
+.progress-wrap{margin:14px 0;display:none;}
+.progress-bar{height:5px;background:#DBEAFE;border-radius:99px;overflow:hidden;}
+.progress-fill{height:100%;background:var(--blue);animation:prog 1.4s ease-in-out infinite;}
+@keyframes prog{0%{width:0%;margin-left:0}50%{width:60%;margin-left:20%}100%{width:0%;margin-left:100%}}
+.progress-text{font-size:12px;color:var(--text-sub);margin-top:7px;text-align:center;}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%);background:#1E293B;color:white;padding:9px 20px;border-radius:99px;font-size:13px;font-weight:500;opacity:0;pointer-events:none;transition:opacity .25s;z-index:999;}
+.toast.show{opacity:1;}
+
+/* ─────────────────────────────────────────────
+   RULE EDITOR
+───────────────────────────────────────────── */
+.rules-page{display:none;}
+.rules-page.active{display:block;}
+
+.rules-header{
+  display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;
+}
+.rules-header h2{font-size:18px;font-weight:700;}
+.rules-actions{display:flex;gap:8px;}
+
+.rule-section{background:white;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.07);margin-bottom:18px;overflow:hidden;}
+.rule-section-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 18px;border-bottom:1px solid var(--border);
+  background:#FAFBFC;
+}
+.rule-section-header .rule-title{font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px;}
+.rule-section-header .rule-desc{font-size:11px;color:var(--text-sub);margin-top:2px;}
+.rule-section-body{padding:14px 18px;}
+
+/* Rule table */
+.rule-table{width:100%;border-collapse:collapse;font-size:13px;}
+.rule-table th{background:#F1F5F9;color:var(--text-sub);font-size:11px;font-weight:600;padding:7px 10px;text-align:left;border-bottom:1px solid var(--border);}
+.rule-table td{padding:5px 4px;border-bottom:1px solid #F1F5F9;vertical-align:middle;}
+.rule-table tr:last-child td{border-bottom:none;}
+.rule-table tr:hover td{background:#F8FAFC;}
+
+/* Editable cell input */
+.cell-input{
+  width:100%;border:1.5px solid transparent;border-radius:6px;padding:5px 8px;
+  font-size:12px;font-family:inherit;background:transparent;color:var(--text);
+  transition:border-color .15s,background .15s;
+}
+.cell-input:focus{outline:none;border-color:var(--blue);background:#EFF6FF;}
+.cell-input:hover:not(:focus){border-color:var(--border);background:#F8FAFC;}
+
+/* Grade checkboxes */
+.grade-grid{display:flex;flex-wrap:wrap;gap:4px;}
+.grade-cb{display:none;}
+.grade-label{
+  padding:3px 8px;border-radius:6px;border:1.5px solid var(--border);
+  font-size:11px;font-weight:600;cursor:pointer;color:var(--text-sub);
+  transition:all .12s;user-select:none;
+}
+.grade-cb:checked+.grade-label{background:var(--blue);color:white;border-color:var(--blue);}
+
+/* Btn styles */
+.btn{padding:6px 14px;border:none;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;}
+.btn-blue{background:var(--blue);color:white;} .btn-blue:hover{background:var(--blue-light);}
+.btn-green{background:#E8F5E9;color:var(--green);border:1px solid #C8E6C9;} .btn-green:hover{background:#C8E6C9;}
+.btn-red{background:var(--red-bg);color:var(--red);border:1px solid #FFCDD2;} .btn-red:hover{background:#FFCDD2;}
+.btn-gray{background:#F1F5F9;color:var(--text-sub);border:1px solid var(--border);} .btn-gray:hover{background:var(--border);}
+.btn-sm{padding:3px 10px;font-size:11px;}
+
+.add-row-area{margin-top:10px;display:flex;gap:8px;align-items:center;}
+.save-bar{
+  position:sticky;bottom:0;background:white;border-top:1px solid var(--border);
+  padding:12px 24px;display:flex;align-items:center;justify-content:space-between;
+  box-shadow:0 -2px 8px rgba(0,0,0,.06);margin-top:8px;
+}
+.save-hint{font-size:12px;color:var(--text-sub);}
+
+/* ── JSON Convert Banner ── */
+.json-banner{
+  display:none;align-items:center;justify-content:space-between;gap:12px;
+  background:#E8F5E9;border:1.5px solid #A5D6A7;border-radius:12px;
+  padding:12px 18px;margin-top:12px;
+}
+.json-banner.show{display:flex;}
+.json-banner-left{display:flex;align-items:center;gap:10px;font-size:13px;}
+.json-banner-left .icon{font-size:20px;}
+.json-banner-left strong{color:var(--green);}
+.json-banner-left span{color:#2E7D32;font-size:12px;}
+.json-banner-right{display:flex;align-items:center;gap:8px;flex-shrink:0;}
+.json-dl-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:7px 16px;border-radius:8px;border:none;
+  background:var(--green);color:white;font-size:12px;font-weight:700;
+  cursor:pointer;transition:background .15s;
+}
+.json-dl-btn:hover{background:#1B5E20;}
+.json-banner-close{
+  background:none;border:none;color:#2E7D32;cursor:pointer;
+  font-size:16px;padding:2px 4px;opacity:.6;
+}
+.json-banner-close:hover{opacity:1;}
+
+/* ── Current Rules Summary ── */
+.cur-rules-panel{
+  background:white;border-radius:14px;box-shadow:0 1px 4px rgba(0,0,0,.07);
+  margin-bottom:18px;overflow:hidden;
+}
+.cur-rules-panel-header{
+  background:linear-gradient(135deg,#0D47A1,#1976D2);
+  color:white;padding:12px 18px;
+  display:flex;align-items:center;justify-content:space-between;cursor:pointer;
+  user-select:none;
+}
+.cur-rules-panel-header h3{font-size:13px;font-weight:700;}
+.cur-rules-panel-header .toggle-icon{font-size:12px;opacity:.85;transition:transform .2s;}
+.cur-rules-panel-header.collapsed .toggle-icon{transform:rotate(-90deg);}
+.cur-rules-body{padding:16px 18px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+.cur-rules-body.collapsed{display:none;}
+
+.cur-col h4{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--text-sub);margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.cur-model-item{
+  display:flex;align-items:flex-start;gap:6px;padding:5px 0;
+  border-bottom:1px solid #F8FAFC;font-size:12px;
+}
+.cur-model-item:last-child{border-bottom:none;}
+.cur-model-name{font-weight:600;color:var(--text);min-width:140px;flex-shrink:0;}
+.cur-grade-tags{display:flex;flex-wrap:wrap;gap:3px;}
+.cur-grade-tag{
+  padding:1px 5px;border-radius:4px;font-size:10px;font-weight:700;
+  background:#EFF6FF;color:var(--blue);border:1px solid #BFDBFE;
+}
+
+.cur-excl-item{font-size:12px;padding:4px 0;border-bottom:1px solid #F8FAFC;color:var(--text);}
+.cur-excl-item:last-child{border-bottom:none;}
+.cur-excl-badge{display:inline-block;padding:1px 7px;border-radius:4px;font-size:10px;font-weight:700;background:var(--red-bg);color:var(--red);margin-left:4px;}
+
+.cur-kw-item{display:flex;align-items:center;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid #F8FAFC;}
+.cur-kw-item:last-child{border-bottom:none;}
+.cur-kw-keyword{font-weight:600;color:var(--text);}
+.cur-cat-badge{padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;}
+
+.cur-full-col{grid-column:1/-1;}
+
+.hidden{display:none!important;}
+</style>
+</head>
+<body>
+
+<!-- ══ HEADER ══ -->
+<header>
+  <span class="logo">📱</span>
+  <div class="title-wrap">
+    <h1>Stock Profiling Dashboard</h1>
+    <p>Smartphone Master Data Validation &amp; Classification</p>
+  </div>
+  <nav class="page-nav">
+    <button class="active" onclick="switchPage('dashboard',this)">📊 대시보드</button>
+    <button onclick="switchPage('rules',this)">⚙️ 규칙 관리</button>
+  </nav>
+</header>
+
+<!-- ══ DASHBOARD PAGE ══ -->
+<div id="page-dashboard" class="page active">
+<main>
+
+  <!-- Upload -->
+  <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+    <div class="icon">📊</div>
+    <h2>파일을 드래그하거나 클릭하여 업로드</h2>
+    <p>Excel 또는 JSON 파일을 선택하세요</p>
+    <div class="input-methods">
+      <span class="method-badge">📄 .xlsx / .xls</span>
+      <span class="method-badge">🗂 .json</span>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls,.json">
+  </div>
+
+  <!-- JSON 변환 알림바 -->
+  <div class="json-banner" id="jsonBanner">
+    <div class="json-banner-left">
+      <span class="icon">✅</span>
+      <div>
+        <strong>Excel → JSON 변환 완료</strong>
+        <span id="jsonBannerDesc"> · DRM 없이 재사용 가능한 JSON 파일이 준비되었습니다.</span>
+      </div>
+    </div>
+    <div class="json-banner-right">
+      <button class="json-dl-btn" onclick="downloadConvertedJson()">⬇️ JSON 저장</button>
+      <button class="json-banner-close" onclick="document.getElementById('jsonBanner').classList.remove('show')" title="닫기">✕</button>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-wrap" id="progressWrap">
+    <div class="progress-bar"><div class="progress-fill"></div></div>
+    <div class="progress-text" id="progressText">파일 분석 중...</div>
+  </div>
+
+  <!-- Results -->
+  <div id="results" class="hidden">
+    <div class="result-summary">
+      <div id="resultSummaryText"></div>
+      <div class="filter-btns">
+        <button class="filter-btn active" onclick="filterRows('all',this)">전체</button>
+        <button class="filter-btn" onclick="filterRows('err',this)">오류만</button>
+        <button class="filter-btn" onclick="filterRows('ok',this)">정상만</button>
+        <button class="filter-btn" style="color:#C62828;border-color:#FFCDD2;" onclick="resetData()">↺ 초기화</button>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table><thead id="tableHead"></thead><tbody id="tableBody"></tbody></table>
+    </div>
+    <button class="dl-btn" onclick="downloadResult()">⬇️ 결과 Excel 다운로드</button>
+  </div>
+
+</main>
+</div>
+
+<!-- ══ RULES PAGE ══ -->
+<div id="page-rules" class="page">
+<main>
+
+  <div class="rules-header">
+    <div>
+      <h2>⚙️ 규칙 관리</h2>
+      <p style="font-size:12px;color:var(--text-sub);margin-top:4px;">CRN · Refurbish · Recycling 분류 규칙을 직접 수정합니다. 변경사항은 브라우저에 저장됩니다.</p>
+    </div>
+    <div class="rules-actions">
+      <button class="btn btn-gray" onclick="exportRules()">📤 JSON 내보내기</button>
+      <button class="btn btn-gray" onclick="document.getElementById('importInput').click()">📥 JSON 가져오기</button>
+      <button class="btn btn-gray" onclick="resetRules()">↺ 기본값 복원</button>
+      <input type="file" id="importInput" accept=".json" style="display:none" onchange="importRules(event)">
+    </div>
+  </div>
+
+  <!-- 현재 적용 중인 규칙 요약 -->
+  <div class="cur-rules-panel">
+    <div class="cur-rules-panel-header" id="curRulesToggle" onclick="toggleCurRules()">
+      <h3>📋 현재 적용 중인 규칙</h3>
+      <span class="toggle-icon">▼</span>
+    </div>
+    <div class="cur-rules-body" id="curRulesBody"></div>
+  </div>
+
+  <!-- ① CRN -->
+  <div class="rule-section" id="sec-crn">
+    <div class="rule-section-header">
+      <div>
+        <div class="rule-title">🔵 CRN 적용 모델</div>
+        <div class="rule-desc">해당 모델 prefix에 대해 CRN 등급을 부여합니다. 등급은 체크박스로 선택하세요.</div>
+      </div>
+      <button class="btn btn-green btn-sm" onclick="addRow('crn')">+ 행 추가</button>
+    </div>
+    <div class="rule-section-body">
+      <table class="rule-table">
+        <thead><tr><th style="width:260px">모델명 Prefix</th><th>적용 등급</th><th style="width:56px"></th></tr></thead>
+        <tbody id="crn-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ② Refurbish -->
+  <div class="rule-section" id="sec-refurbish">
+    <div class="rule-section-header">
+      <div>
+        <div class="rule-title">🟠 Refurbish 적용 모델</div>
+        <div class="rule-desc">리퍼비시 가능 모델을 정의합니다.</div>
+      </div>
+      <button class="btn btn-green btn-sm" onclick="addRow('refurbish')">+ 행 추가</button>
+    </div>
+    <div class="rule-section-body">
+      <table class="rule-table">
+        <thead><tr><th style="width:260px">모델명 Prefix</th><th>적용 등급</th><th style="width:56px"></th></tr></thead>
+        <tbody id="refurbish-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ③ Recycling -->
+  <div class="rule-section" id="sec-recycling">
+    <div class="rule-section-header">
+      <div>
+        <div class="rule-title">🟢 Recycling 적용 모델</div>
+        <div class="rule-desc">재활용 처리 가능 모델을 정의합니다.</div>
+      </div>
+      <button class="btn btn-green btn-sm" onclick="addRow('recycling')">+ 행 추가</button>
+    </div>
+    <div class="rule-section-body">
+      <table class="rule-table">
+        <thead><tr><th style="width:260px">모델명 Prefix</th><th>적용 등급</th><th style="width:56px"></th></tr></thead>
+        <tbody id="recycling-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ④ Storage 제외 -->
+  <div class="rule-section">
+    <div class="rule-section-header">
+      <div>
+        <div class="rule-title">⛔ Storage 제외 규칙</div>
+        <div class="rule-desc">특정 모델+용량 조합에서 특정 카테고리를 제외합니다. (예: Galaxy S25 Ultra 1TB → CRN 제외)</div>
+      </div>
+      <button class="btn btn-green btn-sm" onclick="addRow('exclusion')">+ 행 추가</button>
+    </div>
+    <div class="rule-section-body">
+      <table class="rule-table">
+        <thead><tr><th>모델명</th><th style="width:130px">Storage</th><th style="width:130px">제외 카테고리</th><th style="width:56px"></th></tr></thead>
+        <tbody id="exclusion-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ⑤ 카테고리 키워드 -->
+  <div class="rule-section">
+    <div class="rule-section-header">
+      <div>
+        <div class="rule-title">🏷️ 모델 카테고리 키워드</div>
+        <div class="rule-desc">모델명에 키워드가 포함되면 해당 카테고리로 분류합니다. 우선순위 순서대로 적용됩니다.</div>
+      </div>
+      <button class="btn btn-green btn-sm" onclick="addRow('category')">+ 행 추가</button>
+    </div>
+    <div class="rule-section-body">
+      <table class="rule-table">
+        <thead><tr><th>키워드 (대소문자 무관)</th><th style="width:200px">카테고리</th><th style="width:56px"></th></tr></thead>
+        <tbody id="category-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Save bar -->
+  <div class="save-bar">
+    <span class="save-hint" id="save-hint">변경사항이 있으면 저장하세요.</span>
+    <button class="btn btn-blue" style="padding:9px 28px;font-size:14px;" onclick="saveRules()">💾 규칙 저장</button>
+  </div>
+
+</main>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script src="index.js"></script>
+</body>
+</html>
