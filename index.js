@@ -399,6 +399,10 @@ function handleFile(file) {
       try {
         const arr = JSON.parse(e.target.result);
         const data = Array.isArray(arr) ? arr : [arr];
+        if (!data.length || data[0] == null) {
+          showToast('❌ JSON 파일이 비어있습니다. Excel 변환 결과를 확인해 주세요.');
+          hideProgress(); return;
+        }
         // 배열의 배열 → loadFromAoa, 객체 배열 → loadFromJson
         if (Array.isArray(data[0])) {
           loadFromAoa(data, file.name);
@@ -522,6 +526,10 @@ function loadFromAoa(data, name) {
 
 function loadFromJson(json, name) {
   colIdx = {};
+  if (!json || !json.length || json[0] == null) {
+    showToast('❌ 데이터 행이 없습니다. JSON 파일 구조를 확인해 주세요.');
+    hideProgress(); return;
+  }
   originalHeaders = Object.keys(json[0]);
   allRows = json.map(obj => originalHeaders.map(k => obj[k] ?? ''));
   if (!_convertedJson) document.getElementById('jsonBanner').classList.remove('show');
