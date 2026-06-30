@@ -398,7 +398,13 @@ function handleFile(file) {
     r.onload = e => {
       try {
         const arr = JSON.parse(e.target.result);
-        loadFromJson(Array.isArray(arr) ? arr : [arr], file.name);
+        const data = Array.isArray(arr) ? arr : [arr];
+        // 배열의 배열 → loadFromAoa, 객체 배열 → loadFromJson
+        if (Array.isArray(data[0])) {
+          loadFromAoa(data, file.name);
+        } else {
+          loadFromJson(data, file.name);
+        }
       } catch(err) { showToast('❌ JSON 오류: ' + err.message); hideProgress(); }
     };
     r.readAsText(file, 'utf-8');
