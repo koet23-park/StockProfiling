@@ -373,6 +373,15 @@ function findColIdx(headers) {
   return result;
 }
 
+// GitHub Pages 접속 시 DRM 안내 배너 표시
+(function() {
+  const isLocalhost = ['localhost', '127.0.0.1'].includes(location.hostname);
+  const isFile      = location.protocol === 'file:';
+  if (!isLocalhost && !isFile) {
+    document.getElementById('drmBanner').classList.add('show');
+  }
+})();
+
 // 드래그앤드롭
 const dz = document.getElementById('dropZone');
 dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('drag'); });
@@ -444,12 +453,16 @@ function handleFile(file) {
       if (!data || data.length < 2) throw new Error('시트에 데이터가 없습니다.');
       loadFromAoa(data, file.name);
     } catch(err) {
-      showToast('❌ Excel 읽기 실패. DRM 보호 파일은 로컬에서 JSON으로 변환 후 업로드해 주세요.');
+      showToast('❌ DRM 파일입니다. 아래 안내에 따라 JSON으로 변환 후 업로드해 주세요.');
+      document.getElementById('drmBanner').classList.add('show');
+      document.getElementById('drmBanner').scrollIntoView({behavior:'smooth', block:'center'});
       hideProgress();
     }
   };
   reader.onerror = () => {
-    showToast('❌ Excel 읽기 실패. DRM 보호 파일은 로컬에서 JSON으로 변환 후 업로드해 주세요.');
+    showToast('❌ DRM 파일입니다. 아래 안내에 따라 JSON으로 변환 후 업로드해 주세요.');
+    document.getElementById('drmBanner').classList.add('show');
+    document.getElementById('drmBanner').scrollIntoView({behavior:'smooth', block:'center'});
     hideProgress();
   };
   reader.readAsArrayBuffer(file);

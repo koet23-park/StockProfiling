@@ -209,6 +209,21 @@ td.row-result,th.row-result{text-align:center;width:52px;min-width:52px;backgrou
 }
 .save-hint{font-size:12px;color:var(--text-sub);}
 
+/* ── DRM 안내 배너 ── */
+.drm-banner{
+  display:none;align-items:flex-start;gap:14px;
+  background:#FFF8E1;border:1.5px solid #FFD54F;border-radius:12px;
+  padding:14px 18px;margin-bottom:14px;
+}
+.drm-banner.show{display:flex;}
+.drm-banner-icon{font-size:22px;flex-shrink:0;margin-top:1px;}
+.drm-banner-body{flex:1;font-size:12.5px;color:#5D4037;line-height:1.7;}
+.drm-banner-body strong{color:#E65100;font-size:13px;}
+.drm-banner-steps{margin:6px 0 0 0;padding-left:18px;}
+.drm-banner-steps li{margin-bottom:2px;}
+.drm-banner a{color:var(--blue);font-weight:700;text-decoration:none;}
+.drm-banner a:hover{text-decoration:underline;}
+
 /* ── JSON Convert Banner ── */
 .json-banner{
   display:none;align-items:center;justify-content:space-between;gap:12px;
@@ -308,6 +323,20 @@ td.row-result,th.row-result{text-align:center;width:52px;min-width:52px;backgrou
       <span class="method-badge">🗂 .json</span>
     </div>
     <input type="file" id="fileInput" accept=".xlsx,.xls,.json">
+  </div>
+
+  <!-- DRM 안내 배너 (GitHub Pages에서만 표시) -->
+  <div class="drm-banner" id="drmBanner">
+    <div class="drm-banner-icon">⚠️</div>
+    <div class="drm-banner-body">
+      <strong>삼성 DRM 파일은 GitHub Pages에서 직접 읽을 수 없습니다.</strong><br>
+      로컬 PC에서 아래 절차로 JSON 변환 후 업로드하세요.
+      <ol class="drm-banner-steps">
+        <li><strong>서버시작.bat</strong> 실행 → 브라우저에서 <a href="http://localhost:5500/index.html" target="_blank">localhost:5500</a> 접속</li>
+        <li>Excel 파일 업로드 → 검증 완료 후 <strong>「⬇️ JSON 저장」</strong> 클릭</li>
+        <li>저장된 <strong>.json 파일</strong>을 이 페이지에 업로드</li>
+      </ol>
+    </div>
   </div>
 
   <!-- JSON 변환 알림바 -->
