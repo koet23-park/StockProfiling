@@ -413,6 +413,7 @@ function toggleCurRules() {
 let allRows = [], originalHeaders = [], processedRows = [];
 let colIdx = {};
 let _gradeColMap = {};
+let _gradeRowMeta = null;
 let _currentFilter = 'all';
 
 const ALIASES = {
@@ -570,23 +571,38 @@ function loadFromAoa(data, name) {
   const r0 = data[0]?.map(c => String(c||'').trim()) || [];
   const r1 = data[1]?.map(c => String(c||'').trim()) || [];
   const r2 = data[2]?.map(c => String(c||'').trim()) || [];
-  let headers, dataRows;
+  let headers, dataRows, gradeRow;
+
   if (r0[0] === 'Confidential' && r2.some(v => GRADE_SET.has(v))) {
-    headers  = buildCompositeHeaders(r1, r2);
+    // Stock Profiling 형식: Row 1="Confidential", Row 2=헤더, Row 3=등급, Row 4+=데이터
+    // 합성 헤더를 만들지 말고 원본 헤더(r1) 유지
+    headers = r1;
+    gradeRow = r2;
     dataRows = data.slice(3);
   } else if (r1.some(v => GRADE_SET.has(v)) && data.length > 2) {
-    headers  = buildCompositeHeaders(r0, r1);
+    // 대안 형식: Row 1=헤더, Row 2=등급, Row 3+=데이터
+    headers = r0;
+    gradeRow = r1;
     dataRows = data.slice(2);
   } else {
-    headers  = r0;
+    // 등급 행이 없는 형식 (예: Stock Profiling 입력 원본)
+    headers = r0;
+    gradeRow = null;
     dataRows = data.slice(1);
   }
+
   dataRows = dataRows.filter(r => r.some(c => String(c||'').trim() !== ''));
   const json = dataRows.map(row => {
     const obj = {};
     headers.forEach((h, i) => { obj[h] = row[i] ?? ''; });
     return obj;
   });
+
+  // gradeRow를 메타데이터로 저장 (profileRow에서 사용)
+  if (gradeRow) {
+    _gradeRowMeta = gradeRow;
+  }
+
   if (/\.(xlsx|xls)$/i.test(name)) {
     _convertedJson = json;
     _convertedJsonName = name.replace(/\.(xlsx|xls)$/i, '.json');
@@ -650,14 +666,49 @@ function profileRow(row, idx) {
   const sku = get(row, 'sku');
   const price = parseFloat(get(row, 'price_usd'));
 
-  // 2. 검증 규칙 조회
-  const expected = getExpectedGrades(model, storage, marketing, manufacturer);
+  // 2. M~AM 컬럼(등급별 Y/N)에서 Y인 카테고리/등급 수집
+  const foundGrades = { CRN: new Set(), Refurbish: new Set(), Recycling: new Set() };
+  let hasAnyGrade = false;
 
-  // 3. 기본 품질 검증 + 등급 컬럼 검증
+  for (let i = 0; i < originalHeaders.length; i++) {
+    const gradeInfo = _gradeColMap[i];
+    if (!gradeInfo) continue;
+
+    const cellValue = String(row[i] || '').trim().toUpperCase();
+    if (cellValue === 'Y') {
+      foundGrades[gradeInfo.category].add(gradeInfo.grade);
+      hasAnyGrade = true;
+    }
+  }
+
+  // 3. matched_model 결정: 모델명의 첫 단어 (ACER, ASPIRE 등)
+  let matched_model = '';
+  let match_type = 'skipped';
+
+  if (hasAnyGrade) {
+    const normalizedModel = norm(model || '');
+    const words = normalizedModel.split(/\s+/);
+
+    // 첫 단어가 브랜드인 경우 (ACER, ASPIRE, LG, SAMSUNG 제외)
+    if (words.length > 0) {
+      const first = words[0];
+      if (first !== 'GALAXY' && first !== 'IPHONE' && first !== 'PIXEL') {
+        matched_model = first;
+      }
+    }
+
+    if (matched_model) {
+      match_type = 'direct_rule';
+    } else {
+      matched_model = model || marketing || '';
+      match_type = hasAnyGrade ? 'direct_rule' : 'skipped';
+    }
+  }
+
+  // 4. 검증 상태 결정
   let validation_status = 'OK';
   let errors = [];
 
-  // 기본 데이터 품질 검증
   if (!model) {
     errors.push('모델명 누락');
     validation_status = 'ERROR';
@@ -667,32 +718,7 @@ function profileRow(row, idx) {
     validation_status = 'ERROR';
   }
 
-  // 등급 컬럼 검증: expected vs actual
-  const gradeErrors = [];
-  for (let i = 0; i < originalHeaders.length; i++) {
-    const gradeInfo = _gradeColMap[i];
-    if (!gradeInfo) continue;
-
-    const cellValue = get(row, originalHeaders[i]);
-    const actual = norm(cellValue);
-    const expected_val = expected[gradeInfo.category];
-    const shouldBeY = expected_val && expected_val.has(gradeInfo.grade);
-    const isY = actual === 'Y';
-
-    if (shouldBeY && !isY) {
-      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=Y, actual=${actual || 'N'}`);
-    }
-    if (!shouldBeY && isY) {
-      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=N, actual=Y`);
-    }
-  }
-
-  if (gradeErrors.length) {
-    validation_status = 'ERROR';
-    errors.push(...gradeErrors);
-  }
-
-  // 4. 점수 계산 (UI용, 기존 로직 유지)
+  // 5. 점수 계산 (UI용, 기존 로직 유지)
   let score = 50;
   if (validation_status === 'OK') score += 20;
   if (model) score += 5;
@@ -702,18 +728,18 @@ function profileRow(row, idx) {
   if (!isNaN(ram)) score += 5;
   score = Math.min(100, Math.max(0, score));
 
-  // 5. 카테고리 분류 (UI용)
+  // 6. 카테고리 분류 (UI용)
   const category = classifyStandard(model, price, get(row, 'condition'), get(row, 'network_lock'));
 
-  // 6. 결과 객체 반환
+  // 7. 결과 객체 반환
   return {
     row: row,
     model: model,
     sku: sku,
     validation_status: validation_status,
     error_reason: errors.join('; ') || '',
-    matched_model: expected.matched_model || '',
-    match_type: expected.match_type || '',
+    matched_model: matched_model,
+    match_type: match_type,
     model_category: category,
     profiling_score: score.toFixed(1),
     master_flag: validation_status === 'OK' && score >= 50 && model && sku ? 'Y' : 'N'
@@ -837,10 +863,30 @@ function getGradeCellClass(gradeInfo, cellValue, expectedGrades) {
 // ═══════════════════════════════════════════
 function renderAll(name) {
   _gradeColMap = {};
+  const GRADE_SET = new Set(['A+','A','B+','B','C+','C','D+','D','E']);
+
   originalHeaders.forEach((h, i) => {
-    const p = parseGradeHeader(h);
+    // 먼저 합성 헤더 형식 시도 (이전 호환성)
+    let p = parseGradeHeader(h);
+
+    // 합성 헤더 아니면, 원본 헤더 + _gradeRowMeta 조합 시도
+    if (!p && _gradeRowMeta) {
+      const headerCat = String(h||'').trim().toLowerCase();
+      const headerGrade = String(_gradeRowMeta[i]||'').trim();
+
+      if ((headerCat === 'crn' || headerCat === 'refurbish' || headerCat === 'recycling') &&
+          GRADE_SET.has(headerGrade)) {
+        let cat = headerCat;
+        if (cat === 'crn') cat = 'CRN';
+        else if (cat === 'refurbish') cat = 'Refurbish';
+        else cat = 'Recycling';
+        p = {category: cat, grade: headerGrade};
+      }
+    }
+
     if (p) _gradeColMap[i] = p;
   });
+
   _currentFilter = 'all';
   document.querySelectorAll('.filter-btn').forEach((b,i) => b.classList.toggle('active', i===0));
   renderMatrixTable(processedRows);
