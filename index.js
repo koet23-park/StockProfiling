@@ -692,16 +692,20 @@ function profileRow(row, idx) {
     match_type = 'direct_rule';
   }
 
-  // 4. 검증 상태 결정
+  // 4. 검증 상태 결정 (Stock Profiling: E열(actual_model) 있으면 OK)
   let validation_status = 'OK';
   let errors = [];
 
-  if (!model) {
-    errors.push('모델명 누락');
-    validation_status = 'ERROR';
-  }
+  // Stock Profiling 기준: actual_model (E열)이 있으면 기본적으로 OK
+  // SKU 검증은 추가 정보로만 사용
   if (!sku) {
     errors.push('SKU 누락');
+    // SKU 누락만으로는 ERROR를 일으키지 않음 (actual_model이 있으면 OK)
+  }
+
+  // actual_model이 없으면 ERROR
+  if (!actual_model) {
+    errors.push('모델 정보 누락');
     validation_status = 'ERROR';
   }
 
