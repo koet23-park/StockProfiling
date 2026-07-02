@@ -90,6 +90,77 @@ const DEFAULT_RULES = {
 };
 
 // ═══════════════════════════════════════════
+// 1-1. UTILITY FUNCTIONS (규칙 기반 검증용)
+// ═══════════════════════════════════════════
+
+function norm(str) {
+  return String(str || '').trim().toUpperCase().replace(/\s+/g, ' ');
+}
+
+function shouldSkip(modelName, storage, category) {
+  const mn = norm(modelName);
+  const st = norm(storage);
+  for (const excl of (activeRules.exclusions || [])) {
+    if (excl.category !== category) continue;
+    if (mn.includes(norm(excl.model)) && st.includes(norm(excl.storage || ''))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchesPrefix(modelName, marketingName, prefixList) {
+  const sources = [
+    norm(marketingName || ''),
+    norm(modelName || '')
+  ].filter(s => s);
+
+  for (const source of sources) {
+    for (const rule of (prefixList || [])) {
+      const rulePrefix = norm(rule.prefix || '');
+      if (!rulePrefix) continue;
+
+      if (source === rulePrefix) return rule;
+      if (source.startsWith(rulePrefix)) {
+        const nextChar = source[rulePrefix.length];
+        if ([' ', '+', '-', '_'].includes(nextChar)) return rule;
+      }
+    }
+  }
+  return null;
+}
+
+function lookupCrnGrades(modelName, storage, rule) {
+  const mn = norm(modelName);
+  const st = norm(storage);
+
+  // CRN Storage 제외 규칙
+  if (mn.includes('GALAXY S25 ULTRA') && st.includes('1TB')) return new Set();
+  if (mn.includes('SM-S938') && st.includes('1TB')) return new Set();
+
+  return new Set(rule.grades || []);
+}
+
+function lookupRecyclingGrades(modelName, manufacturer, rule) {
+  const mn = norm(modelName);
+  const mfr = norm(manufacturer || '');
+
+  // R2Destroy1: Samsung A-series N-6+, S-series N-8+
+  if (mfr.includes('SAMSUNG')) {
+    if (mn.includes('GALAXY A')) {
+      return new Set(['A+', 'A', 'B+', 'B', 'C+']);
+    }
+  }
+
+  // R2Destroy2: All OEMs → E
+  if (mn.match(/GALAXY|IPHONE|PIXEL/)) {
+    return new Set(['E']);
+  }
+
+  return new Set(rule.grades || []);
+}
+
+// ═══════════════════════════════════════════
 // 2. RULES STATE  (localStorage 연동)
 // ═══════════════════════════════════════════
 const LS_KEY = 'stockProfiling_rules_v1';
@@ -570,28 +641,83 @@ function get(row, key) {
 
 function profileRow(row, idx) {
   if (!Object.keys(colIdx).length) colIdx = findColIdx(originalHeaders);
-  const model = get(row,'model_name'), sku = get(row,'sku');
-  const errors=[], warnings=[];
-  if (!model) errors.push('모델명 누락');
-  if (!sku)   errors.push('SKU 누락');
-  const price=parseFloat(get(row,'price_usd')), qty=parseInt(get(row,'quantity'));
-  if (!isNaN(price)&&(price<0||price>5000)) warnings.push(`가격 범위 이상: ${price}`);
-  if (!isNaN(qty)&&qty<0) errors.push(`수량 음수: ${qty}`);
-  const isLegacy = colIdx.crn >= 0;
-  const category = isLegacy
-    ? classifyLegacy(row, model)
-    : classifyStandard(model, price, get(row,'condition'), get(row,'network_lock'));
-  let score=50;
-  if (!errors.length) score+=20;
-  if (!warnings.length) score+=10;
-  if (model) score+=5; if (sku) score+=5;
-  if (!isNaN(price)) score+=5; if (!isNaN(parseInt(get(row,'ram_gb')))) score+=5;
-  score = Math.min(100,Math.max(0,score));
-  const status = errors.length?'FAIL':warnings.length?'WARNING':'PASS';
-  const masterFlag = (status==='PASS'||status==='WARNING')&&score>=50&&model&&sku?'Y':'N';
-  return {row, model, sku, validation_status:status,
-    error_reason:[...errors,...warnings].join('; ')||'',
-    model_category:category, profiling_score:score.toFixed(1), master_flag:masterFlag};
+
+  // 1. 필수 필드 추출
+  const model = get(row, 'model_name');
+  const storage = get(row, 'storage_gb');
+  const marketing = get(row, 'marketing_name');
+  const manufacturer = get(row, 'manufacturer');
+  const sku = get(row, 'sku');
+  const price = parseFloat(get(row, 'price_usd'));
+
+  // 2. 검증 규칙 조회
+  const expected = getExpectedGrades(model, storage, marketing, manufacturer);
+
+  // 3. 기본 품질 검증 + 등급 컬럼 검증
+  let validation_status = 'OK';
+  let errors = [];
+
+  // 기본 데이터 품질 검증
+  if (!model) {
+    errors.push('모델명 누락');
+    validation_status = 'ERROR';
+  }
+  if (!sku) {
+    errors.push('SKU 누락');
+    validation_status = 'ERROR';
+  }
+
+  // 등급 컬럼 검증: expected vs actual
+  const gradeErrors = [];
+  for (let i = 0; i < originalHeaders.length; i++) {
+    const gradeInfo = _gradeColMap[i];
+    if (!gradeInfo) continue;
+
+    const cellValue = get(row, originalHeaders[i]);
+    const actual = norm(cellValue);
+    const expected_val = expected[gradeInfo.category];
+    const shouldBeY = expected_val && expected_val.has(gradeInfo.grade);
+    const isY = actual === 'Y';
+
+    if (shouldBeY && !isY) {
+      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=Y, actual=${actual || 'N'}`);
+    }
+    if (!shouldBeY && isY) {
+      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=N, actual=Y`);
+    }
+  }
+
+  if (gradeErrors.length) {
+    validation_status = 'ERROR';
+    errors.push(...gradeErrors);
+  }
+
+  // 4. 점수 계산 (UI용, 기존 로직 유지)
+  let score = 50;
+  if (validation_status === 'OK') score += 20;
+  if (model) score += 5;
+  if (sku) score += 5;
+  if (!isNaN(price)) score += 5;
+  const ram = parseInt(get(row, 'ram_gb'));
+  if (!isNaN(ram)) score += 5;
+  score = Math.min(100, Math.max(0, score));
+
+  // 5. 카테고리 분류 (UI용)
+  const category = classifyStandard(model, price, get(row, 'condition'), get(row, 'network_lock'));
+
+  // 6. 결과 객체 반환
+  return {
+    row: row,
+    model: model,
+    sku: sku,
+    validation_status: validation_status,
+    error_reason: errors.join('; ') || '',
+    matched_model: expected.matched_model || '',
+    match_type: expected.match_type || '',
+    model_category: category,
+    profiling_score: score.toFixed(1),
+    master_flag: validation_status === 'OK' && score >= 50 && model && sku ? 'Y' : 'N'
+  };
 }
 
 function classifyLegacy(row, model) {
@@ -637,24 +763,61 @@ function parseGradeHeader(h) {
   return { category: cat, grade: m[2] };
 }
 
-function getExpectedGrades(modelName, storage, marketingName) {
-  const mn   = ((marketingName || modelName || '')).toUpperCase().trim();
-  const stor = (storage || '').toUpperCase().trim();
-  const findGrades = (ruleList) => {
-    for (const rule of (ruleList || [])) {
-      if (rule.prefix && mn.includes(rule.prefix.toUpperCase())) return new Set(rule.grades || []);
-    }
-    return new Set();
-  };
-  const crnGrades = findGrades(activeRules.crn);
-  for (const excl of (activeRules.exclusions || [])) {
-    if (excl.category === 'CRN' &&
-        mn.includes((excl.model || '').toUpperCase()) &&
-        stor.includes((excl.storage || '').toUpperCase())) {
-      crnGrades.clear(); break;
+function getExpectedGrades(modelName, storage, marketingName, manufacturer) {
+  const activeGrades = { CRN: new Set(), Refurbish: new Set(), Recycling: new Set() };
+  let matched_model = null;
+  let match_type = null;
+
+  // ===== CRN 처리 =====
+  if (!shouldSkip(modelName, storage, 'CRN')) {
+    const crnRule = matchesPrefix(modelName, marketingName, activeRules.crn);
+    if (crnRule) {
+      const grades = lookupCrnGrades(modelName, storage, crnRule);
+      activeGrades.CRN = grades;
+      if (grades.size > 0) {
+        matched_model = crnRule.prefix;
+        match_type = 'direct_rule';
+      }
     }
   }
-  return { CRN: crnGrades, Refurbish: findGrades(activeRules.refurbish), Recycling: findGrades(activeRules.recycling) };
+
+  // ===== Refurbish 처리 =====
+  if (!shouldSkip(modelName, storage, 'Refurbish')) {
+    const refRule = matchesPrefix(modelName, marketingName, activeRules.refurbish);
+    if (refRule) {
+      activeGrades.Refurbish = new Set(refRule.grades || []);
+      if (!matched_model) {
+        matched_model = refRule.prefix;
+        match_type = 'direct_rule';
+      }
+    }
+  }
+
+  // ===== Recycling 처리 =====
+  if (!shouldSkip(modelName, storage, 'Recycling')) {
+    const recycRule = matchesPrefix(modelName, marketingName, activeRules.recycling);
+    if (recycRule) {
+      const grades = lookupRecyclingGrades(modelName, manufacturer, recycRule);
+      activeGrades.Recycling = grades;
+      if (!matched_model) {
+        matched_model = recycRule.prefix;
+        match_type = 'direct_rule';
+      }
+    }
+  }
+
+  // matched_model이 없으면 skipped로 표시
+  if (!matched_model) {
+    match_type = 'skipped';
+  }
+
+  return {
+    CRN: activeGrades.CRN,
+    Refurbish: activeGrades.Refurbish,
+    Recycling: activeGrades.Recycling,
+    matched_model: matched_model || '',
+    match_type: match_type || ''
+  };
 }
 
 function getGradeCellClass(gradeInfo, cellValue, expectedGrades) {
@@ -743,7 +906,8 @@ function renderMatrixTable(rows) {
     const modelName     = ci.model_name     >= 0 ? String(r.row[ci.model_name]     || '') : '';
     const marketingName = ci.marketing_name >= 0 ? String(r.row[ci.marketing_name] || '') : '';
     const storage       = ci.storage_gb     >= 0 ? String(r.row[ci.storage_gb]     || '') : '';
-    const expected      = getExpectedGrades(modelName, storage, marketingName);
+    const manufacturer  = ci.manufacturer   >= 0 ? String(r.row[ci.manufacturer]   || '') : '';
+    const expected      = getExpectedGrades(modelName, storage, marketingName, manufacturer);
     let hasErr = false;
     let cells = '';
     r.row.forEach((val, i) => {
@@ -804,11 +968,14 @@ function downloadResult() {
     gradeRow,
     ...processedRows.map((prow, idx) => {
       const dataRow = [...prow.row.map(v => v ?? '')];
-      dataRow.push(prow.validation_status || 'N/A');    // AS: Validation_Result
+      // Status 값 변환: PASS/FAIL/WARNING → OK/ERROR
+      const statusMap = {'PASS': 'OK', 'FAIL': 'ERROR', 'WARNING': 'OK'};
+      const resultStatus = statusMap[prow.validation_status] || prow.validation_status;
+      dataRow.push(resultStatus);                         // AS: Validation_Result
       dataRow.push('');                                   // AT: Expected_Value
       dataRow.push(prow.error_reason || '');             // AU: Error_Reason
-      dataRow.push(prow.model_category || '');           // AV: Matched_Eligibility_Model
-      dataRow.push(prow.profiling_score || '');          // AW: Match_Type (실제로는 점수)
+      dataRow.push(prow.matched_model || '');            // AV: Matched_Eligibility_Model
+      dataRow.push(prow.match_type || '');               // AW: Match_Type
       return dataRow;
     })
   ];
@@ -940,11 +1107,11 @@ function downloadResult() {
           }
         } else if (c === ncols + 3) {
           // AV: Matched_Eligibility_Model
-          cellValue = row.model_category || '';
+          cellValue = row.matched_model || '';
           cellFont = FONT_RES_OK;
         } else if (c === ncols + 4) {
           // AW: Match_Type
-          cellValue = row.profiling_score || '';
+          cellValue = row.match_type || '';
           cellFont = FONT_RES_OK;
         }
 
