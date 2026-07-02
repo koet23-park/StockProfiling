@@ -417,7 +417,8 @@ let _gradeRowMeta = null;
 let _currentFilter = 'all';
 
 const ALIASES = {
-  model_name:     ['model','model name','modelname','model_no','모델명','모델','actual_model','actual model'],
+  actual_model:   ['actual model','actual_model','actual mdl'],
+  model_name:     ['model name','modelname','model_no','모델명','모델','model'],
   marketing_name: ['marketing name','marketing_name','marketing','마케팅명'],
   sku:            ['sku','sku_code','item_code','상품코드','gvi'],
   manufacturer:   ['manufacturer','brand','make','브랜드','제조사','actual manufacturer'],
@@ -661,6 +662,9 @@ function downloadConvertedJson() {
 function runProfiling(name) {
   showProgress(`${allRows.length}행 프로파일링 중...`);
   setTimeout(() => {
+    // 등급 컬럼 맵을 먼저 구성 (profileRow의 등급 검증에 필요)
+    colIdx = findColIdx(originalHeaders);
+    _gradeColMap = buildGradeColMap();
     processedRows = allRows.map((row,idx) => profileRow(row,idx));
     renderAll(name);
     hideProgress();
@@ -678,111 +682,251 @@ function get(row, key) {
   return v==null?'':String(v).trim();
 }
 
+// ═══════════════════════════════════════════
+// 8-A. STOCK PROFILING 검증 엔진 (Python rule_parser/validator 정확 포팅)
+// ═══════════════════════════════════════════
+const SP_GRADE_COLS = ['A+','A','B+','B','C+','C','D+','D','E'];
+const SP_CATEGORIES = ['CRN','Refurbish','Recycling'];
+
+function spNorm(name) {
+  return String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
+}
+
+function spMatchesPrefix(modelUpper, prefixes) {
+  for (const prefix of (prefixes||[])) {
+    const p = prefix.toUpperCase();
+    if (modelUpper === p) return true;
+    if (modelUpper.startsWith(p)) {
+      const nextChar = modelUpper.slice(p.length, p.length + 1);
+      if (nextChar === '' || nextChar === ' ' || nextChar === '+' || nextChar === '-' || nextChar === '_') return true;
+    }
+  }
+  return false;
+}
+
+function spShouldSkip(actualModel) {
+  const D = window.SP_VALIDATION_DATA;
+  if (!D) return false;
+  const m = String(actualModel||'').toUpperCase().trim();
+  const skip = D.skip_model_patterns || {startswith:[], exact:[]};
+  for (const pattern of (skip.startswith||[])) if (m.startsWith(pattern.toUpperCase())) return true;
+  for (const pattern of (skip.exact||[]))      if (m === pattern.toUpperCase())        return true;
+  return false;
+}
+
+function spLookupCrnGrades(actualModel, storage) {
+  const D = window.SP_VALIDATION_DATA;
+  const crnCfg = D.direct_rules.CRN;
+  const defaultGrades = new Set(crnCfg.grades);
+  const nameMapping = D.model_name_mapping || {};
+  const mu = String(actualModel||'').toUpperCase().trim();
+
+  let eligName = null;
+  for (const [sp, en] of Object.entries(nameMapping)) {
+    if (sp.toUpperCase() === mu) { eligName = en; break; }
+  }
+  if (!eligName) return defaultGrades;
+
+  const key = spNorm(eligName);
+  const storageMap = D.crn_storage_map[key];
+  if (!storageMap) return defaultGrades;
+  if (!storage) return new Set();                       // storage 없음 → 판별 불가
+
+  if (storageMap[storage]) return new Set(storageMap[storage]);
+
+  // 명시적 CRN 제외 storage (예: GS25 Ultra 1TB)
+  const exclusions = D.crn_storage_exclusions || {};
+  for (const [exclModel, exclStorages] of Object.entries(exclusions)) {
+    if (mu === exclModel.toUpperCase() || (eligName && eligName.toUpperCase() === exclModel.toUpperCase())) {
+      if ((exclStorages||[]).includes(storage)) return new Set();
+    }
+  }
+
+  // storage 매칭 실패 → union 반환
+  const merged = new Set();
+  for (const grades of Object.values(storageMap)) grades.forEach(g => merged.add(g));
+  return merged.size ? merged : defaultGrades;
+}
+
+function spLookupRecyclingGrades(eligModelName, includeAuction) {
+  const D = window.SP_VALIDATION_DATA;
+  const key = spNorm(eligModelName);
+  const merged = new Set();
+  const r2 = D.recycling_r2_map[key];
+  if (r2) for (const grades of Object.values(r2)) grades.forEach(g => merged.add(g));
+  if (includeAuction) {
+    const auc = D.recycling_auction_map[key];
+    if (auc) for (const grades of Object.values(auc)) grades.forEach(g => merged.add(g));
+  }
+  return merged;
+}
+
+function spPartialRecyclingMatch(actualModel) {
+  const D = window.SP_VALIDATION_DATA;
+  const norm = spNorm(actualModel);
+  let best = '', bestLen = 0;
+  for (const key of Object.keys(D.recycling_r2_map)) {
+    if ((norm.includes(key) || key.includes(norm)) && key.length > bestLen) {
+      best = key; bestLen = key.length;
+    }
+  }
+  return best;
+}
+
+// Python get_expected_grades 포팅 → {CRN:{grade:'Y'/'N'}, Refurbish:{}, Recycling:{}, matched_model, match_type}
+function spGetExpectedGrades(actualModel, storage, manufacturer) {
+  const D = window.SP_VALIDATION_DATA;
+  const result = {};
+  for (const cat of SP_CATEGORIES) {
+    result[cat] = {};
+    for (const g of SP_GRADE_COLS) result[cat][g] = 'N';
+  }
+  result.matched_model = actualModel;
+  result.match_type = 'direct_rule';
+
+  const modelUpper = String(actualModel||'').toUpperCase().trim();
+
+  // 1. CRN
+  const crnCfg = D.direct_rules.CRN;
+  const smCrn = D.sm_number_crn_prefixes || [];
+  const crnEligible = spMatchesPrefix(modelUpper, crnCfg.model_prefixes)
+    || smCrn.some(p => modelUpper.startsWith(p.toUpperCase()));
+  if (crnEligible) {
+    spLookupCrnGrades(actualModel, storage).forEach(g => { if (g in result.CRN) result.CRN[g] = 'Y'; });
+  }
+
+  // 2. Refurbish
+  const refCfg = D.direct_rules.Refurbish;
+  const smRef = D.sm_number_refurb_prefixes || [];
+  const refEligible = spMatchesPrefix(modelUpper, refCfg.model_prefixes)
+    || smRef.some(p => modelUpper.startsWith(p.toUpperCase()));
+  if (refEligible) {
+    for (const g of refCfg.grades) if (g in result.Refurbish) result.Refurbish[g] = 'Y';
+  }
+
+  // 3. Recycling
+  const recMapping = D.recycling_model_name_mapping || {};
+  let eligModel = null;
+  for (const [sp, en] of Object.entries(recMapping)) {
+    if (sp.toUpperCase() === modelUpper) { eligModel = en; break; }
+  }
+  const noAuctionPrefixes = D.recycling_no_auction_prefixes || [];
+  const isNoAuction = noAuctionPrefixes.some(p => modelUpper.startsWith(p.toUpperCase()));
+
+  if (eligModel) {
+    spLookupRecyclingGrades(eligModel, !isNoAuction).forEach(g => { if (g in result.Recycling) result.Recycling[g] = 'Y'; });
+  } else if (String(manufacturer||'').toUpperCase().includes('SAMSUNG')) {
+    const partial = spPartialRecyclingMatch(actualModel);
+    if (partial) {
+      spLookupRecyclingGrades(partial, !isNoAuction).forEach(g => { if (g in result.Recycling) result.Recycling[g] = 'Y'; });
+    }
+  }
+
+  return result;
+}
+
+// 매트릭스 UI용: expected를 {CRN:Set, Refurbish:Set, Recycling:Set} 형태로 변환
+function spExpectedAsSets(actualModel, storage, manufacturer) {
+  if (!window.SP_VALIDATION_DATA) {
+    return { CRN: new Set(), Refurbish: new Set(), Recycling: new Set(), matched_model: actualModel||'', match_type: 'skipped' };
+  }
+  if (spShouldSkip(actualModel)) {
+    return { CRN: new Set(), Refurbish: new Set(), Recycling: new Set(), matched_model: actualModel||'', match_type: 'skipped' };
+  }
+  const exp = spGetExpectedGrades(actualModel, storage, manufacturer);
+  const toSet = catObj => new Set(SP_GRADE_COLS.filter(g => catObj[g] === 'Y'));
+  return {
+    CRN: toSet(exp.CRN),
+    Refurbish: toSet(exp.Refurbish),
+    Recycling: toSet(exp.Recycling),
+    matched_model: exp.matched_model || (actualModel||''),
+    match_type: exp.match_type || 'direct_rule'
+  };
+}
+
 function profileRow(row, idx) {
   if (!Object.keys(colIdx).length) colIdx = findColIdx(originalHeaders);
 
-  // 1. 필수 필드 추출
-  const model = get(row, 'model_name');
-  const storage = get(row, 'storage_gb');
-  const marketing = get(row, 'marketing_name');
-  const manufacturer = get(row, 'manufacturer');
-  const sku = get(row, 'sku');
-  const price = parseFloat(get(row, 'price_usd'));
+  // 1. 필수 필드 추출 (Stock Profiling loader.py 기준)
+  const actual_model = get(row, 'actual_model');   // E열
+  const storage      = get(row, 'storage_gb');     // F열
+  const manufacturer = get(row, 'manufacturer');   // D열
+  const display_bi   = get(row, 'display_bi') || 'N';  // L열
+  const actual_valid_yn = get(row, 'valid_yn');    // AN열
+  const model    = get(row, 'model_name');
+  const marketing= get(row, 'marketing_name');
+  const price    = parseFloat(get(row, 'price_usd'));
 
-  // 2. M~AM 컬럼(등급별 Y/N)에서 Y인 카테고리/등급 수집
-  const foundGrades = { CRN: new Set(), Refurbish: new Set(), Recycling: new Set() };
-  let hasAnyGrade = false;
-
-  for (let i = 0; i < originalHeaders.length; i++) {
-    const gradeInfo = _gradeColMap[i];
-    if (!gradeInfo) continue;
-
-    const cellValue = String(row[i] || '').trim().toUpperCase();
-    if (cellValue === 'Y') {
-      foundGrades[gradeInfo.category].add(gradeInfo.grade);
-      hasAnyGrade = true;
-    }
+  // 2. 행의 실제 등급값(CRN/Refurbish/Recycling)을 카테고리별 dict로 수집
+  //    Python _extract_grades와 동일: 값 없으면 'N'
+  const actualGrades = { CRN:{}, Refurbish:{}, Recycling:{} };
+  for (const cat of SP_CATEGORIES) for (const g of SP_GRADE_COLS) actualGrades[cat][g] = 'N';
+  for (let i = 0; i < row.length; i++) {
+    const gi = _gradeColMap[i];
+    if (!gi) continue;
+    let av = String(row[i] ?? '').trim();
+    if (av === '') av = 'N';
+    actualGrades[gi.category][gi.grade] = av;
   }
 
-  // 3. 규칙 기반 expected grades 계산
-  const expected = getExpectedGrades(model, storage, marketing, manufacturer);
-
-  // 4. matched_model 결정: E열(Actual Model)을 Stock Profiling과 동일하게 사용
-  const actual_model = get(row, 'actual_model');  // E열
-  let matched_model = actual_model || model || marketing || '';
-  let match_type = 'skipped';
-
-  if (matched_model) {
-    match_type = 'direct_rule';
-  } else if (hasAnyGrade) {
-    match_type = 'direct_rule';
-  }
-
-  // 5. 검증 상태 결정 (Stock Profiling: E열(actual_model) 있으면 기본 OK)
+  // 3. Stock Profiling 검증 로직 (validator.py validate_row 포팅)
   let validation_status = 'OK';
-  let errors = [];
+  let matched_model = actual_model;
+  let match_type = 'direct_rule';
+  const errors = [];
 
-  // actual_model이 없으면 ERROR
-  if (!actual_model) {
-    errors.push('모델 정보 누락');
-    validation_status = 'ERROR';
-  }
+  const dataReady = !!window.SP_VALIDATION_DATA;
 
-  // SKU 검증 (정보용, 자동으로 ERROR는 아님)
-  if (!sku) {
-    errors.push('SKU 누락');
-  }
+  if (dataReady && spShouldSkip(actual_model)) {
+    // 와일드카드/비특정 모델은 검증 건너뜀 → OK
+    match_type = 'skipped';
+    matched_model = actual_model;
+  } else if (dataReady) {
+    const expected = spGetExpectedGrades(actual_model, storage, manufacturer);
+    matched_model = expected.matched_model || actual_model;
+    match_type = expected.match_type || 'direct_rule';
 
-  // M~AM 컬럼 vs expected grades 검증: 불일치 → ERROR
-  const gradeErrors = [];
-  for (let i = 0; i < originalHeaders.length; i++) {
-    const gradeInfo = _gradeColMap[i];
-    if (!gradeInfo) continue;
-
-    const cellValue = String(row[i] || '').trim().toUpperCase();
-    const isY = cellValue === 'Y';
-    const expectedSet = expected[gradeInfo.category];
-    const shouldBeY = expectedSet && expectedSet.has(gradeInfo.grade);
-
-    // 불일치 검출
-    if (shouldBeY && !isY) {
-      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=Y, actual=N`);
+    // Grade matrix 검증 (카테고리 → 등급 순서, Python과 동일)
+    for (const cat of SP_CATEGORIES) {
+      for (const g of SP_GRADE_COLS) {
+        const expVal = expected[cat][g] || 'N';
+        const actVal = actualGrades[cat][g] || 'N';
+        if (expVal !== actVal) {
+          errors.push(`${cat} ${g}: expected=${expVal}, actual=${actVal}`);
+        }
+      }
     }
-    if (!shouldBeY && isY) {
-      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=N, actual=Y`);
+
+    // Valid Y/N 검증 (get_valid_yn_expectation은 항상 'Y')
+    const expectedValid = 'Y';
+    if (actual_valid_yn !== expectedValid) {
+      errors.push(`Valid Y/N: expected=${expectedValid}, actual=${actual_valid_yn}`);
     }
+
+    if (errors.length > 0) validation_status = 'ERROR';
   }
 
-  if (gradeErrors.length > 0) {
-    validation_status = 'ERROR';
-    errors.push(...gradeErrors);
-  }
-
-  // 5. 점수 계산 (UI용, 기존 로직 유지)
+  // 4. 점수/카테고리 (UI용)
   let score = 50;
   if (validation_status === 'OK') score += 20;
-  if (model) score += 5;
-  if (sku) score += 5;
+  if (actual_model) score += 10;
   if (!isNaN(price)) score += 5;
   const ram = parseInt(get(row, 'ram_gb'));
   if (!isNaN(ram)) score += 5;
   score = Math.min(100, Math.max(0, score));
+  const category = classifyStandard(actual_model || model, price, get(row, 'condition'), get(row, 'network_lock'));
 
-  // 6. 카테고리 분류 (UI용)
-  const category = classifyStandard(model, price, get(row, 'condition'), get(row, 'network_lock'));
-
-  // 7. 결과 객체 반환
   return {
     row: row,
-    model: model,
-    sku: sku,
+    model: actual_model || model,
+    sku: get(row, 'sku'),
     validation_status: validation_status,
-    error_reason: errors.join('; ') || '',
+    error_reason: errors.join('; '),
     matched_model: matched_model,
     match_type: match_type,
     model_category: category,
     profiling_score: score.toFixed(1),
-    master_flag: validation_status === 'OK' && score >= 50 && model && sku ? 'Y' : 'N'
+    master_flag: validation_status === 'OK' ? 'Y' : 'N'
   };
 }
 
@@ -901,31 +1045,55 @@ function getGradeCellClass(gradeInfo, cellValue, expectedGrades) {
 // ═══════════════════════════════════════════
 // 10. RENDER
 // ═══════════════════════════════════════════
-function renderAll(name) {
-  _gradeColMap = {};
+function buildGradeColMap() {
+  const map = {};
   const GRADE_SET = new Set(['A+','A','B+','B','C+','C','D+','D','E']);
+  const CAT_MAP = { crn: 'CRN', refurbish: 'Refurbish', refurb: 'Refurbish', recycling: 'Recycling' };
+
+  // 원본 구조: 카테고리명은 각 그룹 첫 컬럼(M/V/AE)에만 있고,
+  // 나머지 컬럼(N~U 등)은 헤더가 비어 있으며 등급은 Row3(_gradeRowMeta)에 있음.
+  // → 카테고리를 이월(carry-forward)하면서 등급 컬럼을 채운다.
+  let currentCat = null;
 
   originalHeaders.forEach((h, i) => {
-    // 먼저 합성 헤더 형식 시도 (이전 호환성)
-    let p = parseGradeHeader(h);
+    // 1) 합성 헤더 형식 ("CRN A+") 우선 지원 (이전 호환성)
+    const composite = parseGradeHeader(h);
+    if (composite) {
+      map[i] = composite;
+      currentCat = composite.category;
+      return;
+    }
 
-    // 합성 헤더 아니면, 원본 헤더 + _gradeRowMeta 조합 시도
-    if (!p && _gradeRowMeta) {
-      const headerCat = String(h||'').trim().toLowerCase();
-      const headerGrade = String(_gradeRowMeta[i]||'').trim();
+    // 2) 헤더가 카테고리명이면 현재 카테고리 갱신
+    const headerNorm = String(h || '').trim().toLowerCase();
+    if (CAT_MAP[headerNorm]) {
+      currentCat = CAT_MAP[headerNorm];
+    }
 
-      if ((headerCat === 'crn' || headerCat === 'refurbish' || headerCat === 'recycling') &&
-          GRADE_SET.has(headerGrade)) {
-        let cat = headerCat;
-        if (cat === 'crn') cat = 'CRN';
-        else if (cat === 'refurbish') cat = 'Refurbish';
-        else cat = 'Recycling';
-        p = {category: cat, grade: headerGrade};
+    // 3) Row3(_gradeRowMeta)에 등급이 있고 현재 카테고리가 유효하면 매핑
+    if (currentCat && _gradeRowMeta) {
+      const grade = String(_gradeRowMeta[i] || '').trim();
+      if (GRADE_SET.has(grade)) {
+        map[i] = { category: currentCat, grade: grade };
+        return;
       }
     }
 
-    if (p) _gradeColMap[i] = p;
+    // 4) 등급 없는 일반 컬럼을 만나면 카테고리 이월 종료
+    //    (등급 행이 비어있는 정보 컬럼 = 카테고리 그룹 밖)
+    if (currentCat && _gradeRowMeta) {
+      const grade = String(_gradeRowMeta[i] || '').trim();
+      if (!GRADE_SET.has(grade) && headerNorm && !CAT_MAP[headerNorm]) {
+        currentCat = null;
+      }
+    }
   });
+
+  return map;
+}
+
+function renderAll(name) {
+  _gradeColMap = buildGradeColMap();
 
   _currentFilter = 'all';
   document.querySelectorAll('.filter-btn').forEach((b,i) => b.classList.toggle('active', i===0));
@@ -989,26 +1157,25 @@ function renderMatrixTable(rows) {
   const gradeIdxs = Object.keys(_gradeColMap).map(Number);
   const firstGradeIdx = gradeIdxs.length > 0 ? Math.min(...gradeIdxs) : Infinity;
   const tbody = rows.map((r, rowIdx) => {
-    const modelName     = ci.model_name     >= 0 ? String(r.row[ci.model_name]     || '') : '';
-    const marketingName = ci.marketing_name >= 0 ? String(r.row[ci.marketing_name] || '') : '';
-    const storage       = ci.storage_gb     >= 0 ? String(r.row[ci.storage_gb]     || '') : '';
-    const manufacturer  = ci.manufacturer   >= 0 ? String(r.row[ci.manufacturer]   || '') : '';
-    const expected      = getExpectedGrades(modelName, storage, marketingName, manufacturer);
-    let hasErr = false;
+    const actualModel  = ci.actual_model  >= 0 ? String(r.row[ci.actual_model]  || '') : '';
+    const storage      = ci.storage_gb    >= 0 ? String(r.row[ci.storage_gb]    || '') : '';
+    const manufacturer = ci.manufacturer  >= 0 ? String(r.row[ci.manufacturer]  || '') : '';
+    // 매트릭스 색상도 Stock Profiling 엔진과 동일하게 계산
+    const expected     = spExpectedAsSets(actualModel, storage, manufacturer);
     let cells = '';
     r.row.forEach((val, i) => {
       const gi = _gradeColMap[i];
       if (gi) {
         const cls = getGradeCellClass(gi, val, expected);
-        if (cls === 'grade-err-missing' || cls === 'grade-err-extra') hasErr = true;
         cells += `<td class="grade-cell ${cls}">${escHtml(String(val))}</td>`;
       } else {
         const infoCls = i < firstGradeIdx ? 'cell-info' : '';
         cells += `<td${infoCls ? ` class="${infoCls}"` : ''}>${escHtml(String(val))}</td>`;
       }
     });
-    r._hasGradeError = hasErr;
-    const badge = hasErr ? '<span class="badge-err">오류</span>' : '<span class="badge-ok">정상</span>';
+    // 검증 결과 배지는 profileRow의 validation_status 기준 (Valid Y/N 포함)
+    r._hasGradeError = (r.validation_status === 'ERROR');
+    const badge = r._hasGradeError ? '<span class="badge-err">오류</span>' : '<span class="badge-ok">정상</span>';
     return `<tr><td class="row-num">${rowIdx+1}</td><td class="row-result">${badge}</td>${cells}</tr>`;
   }).join('');
   document.getElementById('tableBody').innerHTML = tbody;
