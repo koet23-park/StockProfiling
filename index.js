@@ -841,14 +841,17 @@ function downloadResult() {
   const FONT      = { name:'Roboto', sz:9 };
   const FONT_B    = { name:'Roboto', sz:9, bold:true };
   const FONT_CONF = { name:'Arial', sz:18, italic:false };
-  const FONT_RES_HEADER = { name:'Default', sz:11, bold:true, color:{rgb:'FFFFFFFF'} };
-  const FONT_RES_OK = { name:'Default', sz:11 };
+  const FONT_RES_HEADER = { name:'Calibri', sz:11, bold:true, color:{rgb:'FFFFFFFF'} };
+  const FONT_RES_OK = { name:'Calibri', sz:11 };
+  const FONT_RES_ERROR = { name:'Calibri', sz:11, color:{rgb:'FFC62828'}, bold:true };
   const NO_FILL   = { patternType:'none' };
   const WHITE     = { patternType:'solid', fgColor:{ rgb:'FFFFFF' } };
   const DATA_FILL = { patternType:'solid', fgColor:{ rgb:'EFF8FF' } };
   const ERR_FILL  = { patternType:'solid', fgColor:{ rgb:'FFC000' } };
   const RES_HEADER_FILL = { patternType:'solid', fgColor:{ rgb:'FF1565C0' } };
   const RES_OK_FILL = { patternType:'solid', fgColor:{ rgb:'FFC8E6C9' } };
+  const RES_ERROR_FILL = { patternType:'solid', fgColor:{ rgb:'FFFF0000' } };
+  const RES_ERROR_TEXT_FILL = { patternType:'solid', fgColor:{ rgb:'FFFFCCCC' } };
 
   const gradeIdxs = Object.keys(_gradeColMap).map(Number);
   const firstGradeIdx = gradeIdxs.length > 0 ? Math.min(...gradeIdxs) : Infinity;
@@ -903,16 +906,42 @@ function downloadResult() {
       } else {
         // Result columns
         let cellValue = '';
-        if (c === ncols) cellValue = row.validation_status || '';
-        else if (c === ncols + 1) cellValue = '';
-        else if (c === ncols + 2) cellValue = row.error_reason || '';
-        else if (c === ncols + 3) cellValue = row.model_category || '';
-        else if (c === ncols + 4) cellValue = row.profiling_score || '';
+        let cellFill = NO_FILL;
+        let cellFont = FONT_RES_OK;
+
+        if (c === ncols) {
+          // AS: Validation_Result
+          cellValue = row.validation_status || '';
+          if (cellValue === 'PASS') {
+            cellFill = RES_OK_FILL;
+            cellFont = { name:'Calibri', sz:11, color:{rgb:'FF1B5E20'}, bold:true };
+          } else if (cellValue === 'FAIL' || cellValue === 'WARNING') {
+            cellFill = RES_ERROR_FILL;
+            cellFont = { name:'Calibri', sz:11, color:{rgb:'FFFFFFFF'}, bold:true };
+          }
+        } else if (c === ncols + 1) {
+          // AT: Expected_Value
+          cellValue = '';
+          cellFont = FONT_RES_OK;
+        } else if (c === ncols + 2) {
+          // AU: Error_Reason
+          cellValue = row.error_reason || '';
+          if (cellValue) {
+            cellFill = RES_ERROR_TEXT_FILL;
+            cellFont = FONT_RES_ERROR;
+          }
+        } else if (c === ncols + 3) {
+          // AV: Matched_Eligibility_Model
+          cellValue = row.model_category || '';
+          cellFont = FONT_RES_OK;
+        } else if (c === ncols + 4) {
+          // AW: Match_Type
+          cellValue = row.profiling_score || '';
+          cellFont = FONT_RES_OK;
+        }
 
         if (!ws[ref]) ws[ref] = { v: cellValue, t:'s' };
-        const fill = (c === ncols && row.validation_status === 'PASS') ? RES_OK_FILL : NO_FILL;
-        const font = (c === ncols) ? FONT_RES_OK : FONT;
-        ws[ref].s = { fill, font, border:NO_FILL,
+        ws[ref].s = { fill:cellFill, font:cellFont, border:NO_FILL,
                       alignment:{ horizontal: c === ncols ? 'center':'left', vertical:'top' } };
       }
     }
