@@ -511,7 +511,7 @@ function handleFile(file) {
       .then(buf => {
         const wb   = XLSX.read(buf, {type:'array'});
         const ws   = wb.Sheets[wb.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+        const data = XLSX.utils.sheet_to_aoa(ws, {defval:''});
         if (!data || data.length < 2) throw new Error('시트에 데이터가 없습니다.');
         loadFromAoa(data, file.name);
       })
@@ -532,7 +532,7 @@ function handleFile(file) {
     try {
       const wb   = XLSX.read(e.target.result, {type:'array'});
       const ws   = wb.Sheets[wb.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+      const data = XLSX.utils.sheet_to_aoa(ws, {defval:''});
       if (!data || data.length < 2) throw new Error('시트에 데이터가 없습니다.');
       loadFromAoa(data, file.name);
     } catch(err) {
@@ -575,8 +575,8 @@ function loadFromAoa(data, name) {
 
   if (r0[0] === 'Confidential' && r2.some(v => GRADE_SET.has(v))) {
     // Stock Profiling 형식: Row 1="Confidential", Row 2=헤더, Row 3=등급, Row 4+=데이터
-    // 합성 헤더를 만들지 말고 원본 헤더(r1) 유지
-    headers = r1;
+    // 원본 헤더(r1) 유지 (empty 값 포함)
+    headers = r1;  // 원본 그대로 유지 (empty 포함)
     gradeRow = r2;
     dataRows = data.slice(3);
   } else if (r1.some(v => GRADE_SET.has(v)) && data.length > 2) {
@@ -592,16 +592,22 @@ function loadFromAoa(data, name) {
   }
 
   dataRows = dataRows.filter(r => r.some(c => String(c||'').trim() !== ''));
-  const json = dataRows.map(row => {
-    const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i] ?? ''; });
-    return obj;
-  });
 
   // gradeRow를 메타데이터로 저장 (profileRow에서 사용)
   if (gradeRow) {
     _gradeRowMeta = gradeRow;
   }
+
+  // JSON 변환용 (DRM 우회용)
+  const json = dataRows.map(row => {
+    const obj = {};
+    headers.forEach((h, i) => {
+      // empty 헤더는 무시하고, 인덱스 기반 키 사용
+      const key = h || `_${i}`;
+      obj[key] = row[i] ?? '';
+    });
+    return obj;
+  });
 
   if (/\.(xlsx|xls)$/i.test(name)) {
     _convertedJson = json;
@@ -609,7 +615,24 @@ function loadFromAoa(data, name) {
     document.getElementById('jsonBannerDesc').textContent = ` · ${_convertedJsonName} — DRM 없이 재사용 가능`;
     document.getElementById('jsonBanner').classList.add('show');
   }
-  loadFromJson(json, name);
+
+  // 원본 배열 형식으로 직접 로드 (JSON 거치지 않음)
+  loadFromAoa2(headers, gradeRow, dataRows, name);
+}
+
+function loadFromAoa2(headers, gradeRow, dataRows, name) {
+  originalHeaders = headers;
+  _gradeRowMeta = gradeRow;
+
+  allRows = dataRows.map(row => {
+    const arr = [];
+    headers.forEach((h, i) => {
+      arr[i] = row[i] ?? '';
+    });
+    return arr;
+  });
+
+  runProfiling(name);
 }
 
 function loadFromJson(json, name) {
