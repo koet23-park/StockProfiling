@@ -881,22 +881,36 @@ function downloadResult() {
 
   // ===== SHEET 2: Validation Rules =====
   const rules = collectRules();
-  const rulesAoa = buildValidationRulesSheet(rules);
-  const rulesWs = SX.utils.aoa_to_sheet(rulesAoa);
-  rulesWs['!cols'] = [{wch:30},{wch:80}];
+  const rulesWs = buildValidationRulesSheet(rules, wb);
   SX.utils.book_append_sheet(wb, rulesWs, 'Validation_Rules');
 
   const ts = new Date().toISOString().slice(0,19).replace(/[-T:]/g,'').replace(/(\d{8})(\d{6})/, '$1_$2');
   SX.writeFile(wb, `Stock_Profiling_Result_${ts}.xlsx`);
 }
 
-function buildValidationRulesSheet(rules) {
+function buildValidationRulesSheet(rules, wb) {
+  const SX = window.XLSXStyle || XLSX;
   const rows = [];
-  const EMPTY = ['', ''];
 
-  // Title
+  // 색상 정의
+  const COLOR_BLUE_DARK = 'FF0D47A1';    // 진한 파란색
+  const COLOR_BLUE_LIGHT = 'FFE3F2FD';   // 연한 파란색
+
+  // 폰트 정의 (Default와 Calibri 구분)
+  const FONT_TITLE = { name: 'Default', sz: 16, bold: true, color: { rgb: COLOR_BLUE_DARK } };
+  const FONT_SECTION = { name: 'Default', sz: 12, bold: true, color: { rgb: 'FFFFFFFF' } };
+  const FONT_HEADER = { name: 'Default', sz: 11, bold: true, color: { rgb: COLOR_BLUE_DARK } };
+  const FONT_DATA = { name: 'Calibri', sz: 11 };
+
+  // 테두리 정의
+  const THIN_BORDER = { style: 'thin', color: { auto: 1 } };
+  const BORDER_ALL = { top: THIN_BORDER, bottom: THIN_BORDER, left: THIN_BORDER, right: THIN_BORDER };
+
+  // Row 1: Title
   rows.push(['Stock Profiling 검증 규칙 정의', '']);
-  rows.push(EMPTY);
+
+  // Row 2: Empty
+  rows.push(['', '']);
 
   // 1. Channel Definitions
   rows.push(['1. 채널 정의 (Channel Definitions)', '']);
@@ -912,7 +926,8 @@ function buildValidationRulesSheet(rules) {
   ];
   channels.forEach(ch => rows.push([ch.name, ch.desc]));
 
-  rows.push(EMPTY);
+  // Empty row
+  rows.push(['', '']);
 
   // 2. CRN 규칙
   rows.push(['2. CRN 규칙', '']);
@@ -925,7 +940,7 @@ function buildValidationRulesSheet(rules) {
   const crnPrefixes = rules.crn ? rules.crn.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25, GALAXY Z FOLD, GALAXY Z FLIP';
   rows.push(['모델 명 (Model Prefixes)', crnPrefixes]);
 
-  rows.push(EMPTY);
+  rows.push(['', '']);
 
   // 3. Refurbish 규칙
   rows.push(['3. Refurbish 규칙', '']);
@@ -938,7 +953,7 @@ function buildValidationRulesSheet(rules) {
   const refPrefixes = rules.refurbish ? rules.refurbish.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25';
   rows.push(['모델 명 (Model Prefixes)', refPrefixes]);
 
-  rows.push(EMPTY);
+  rows.push(['', '']);
 
   // 4. Recycling 규칙
   rows.push(['4. Recycling 규칙', '']);
@@ -950,29 +965,111 @@ function buildValidationRulesSheet(rules) {
   const recyclingPrefixes = rules.recycling ? rules.recycling.map(r => r.prefix).filter(p => p).join(', ') : 'All Models';
   rows.push(['모델 명 (Model Prefixes)', recyclingPrefixes]);
 
-  rows.push(EMPTY);
+  const aoa = rows;
+  const ws = SX.utils.aoa_to_sheet(aoa);
 
-  // 5. 제외 규칙
-  rows.push(['5. 제외 규칙', '']);
-  rows.push(['Model', 'Storage', 'Category', '']);
-  if (rules.exclusions) {
-    rules.exclusions.forEach(excl => {
-      rows.push([excl.model || '', excl.storage || '', excl.category || '', '']);
-    });
+  // Column widths
+  ws['!cols'] = [{wch:30}, {wch:95}];
+
+  // Row heights and styling
+  const merges = [];
+  const rowHeights = {};
+
+  // Row 1: Title
+  rowHeights[0] = {hpt: 22}; // Default height for title
+  ws['A1'].s = { font: FONT_TITLE, alignment: { horizontal: 'left', vertical: 'bottom' } };
+
+  // Row 2: Empty
+  rowHeights[1] = {hpt: 14.25};
+
+  // Row 3: Section 1
+  rowHeights[2] = {hpt: 22};
+  merges.push({s:{r:2,c:0}, e:{r:2,c:1}});
+  ws['A3'].s = { font: FONT_SECTION, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}},
+                alignment: {horizontal:'left', vertical:'center'} };
+
+  // Row 4: Header
+  ws['A4'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+  ws['B4'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+
+  // Rows 5-10: Data
+  for (let i = 5; i <= 10; i++) {
+    const row = i - 1;
+    if (aoa[row]) {
+      const contentLength = (aoa[row][1] || '').length;
+      rowHeights[i-1] = {hpt: contentLength > 50 ? 28 : 16};
+
+      ws[SX.utils.encode_cell({r:row,c:0})].s = { font: FONT_DATA, border: BORDER_ALL,
+                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+      ws[SX.utils.encode_cell({r:row,c:1})].s = { font: FONT_DATA, border: BORDER_ALL,
+                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+    }
   }
 
-  rows.push(EMPTY);
+  // Row 11: Empty
+  rowHeights[10] = {hpt: 14.25};
 
-  // 6. 카테고리 키워드
-  rows.push(['6. 카테고리 키워드', '']);
-  rows.push(['Keyword', 'Category', '']);
-  if (rules.categoryKeywords) {
-    rules.categoryKeywords.forEach(kw => {
-      rows.push([kw.keyword || '', kw.category || '', '']);
-    });
+  // Row 12: Section 2
+  rowHeights[11] = {hpt: 22};
+  merges.push({s:{r:11,c:0}, e:{r:11,c:1}});
+  ws['A12'].s = { font: FONT_SECTION, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}},
+                alignment: {horizontal:'left', vertical:'center'} };
+
+  // Row 13: Header
+  ws['A13'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+  ws['B13'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+
+  // Rows 14-16: Data
+  for (let i = 14; i <= 16; i++) {
+    const row = i - 1;
+    if (aoa[row]) {
+      const contentLength = (aoa[row][1] || '').length;
+      rowHeights[i-1] = {hpt: contentLength > 50 ? 28 : 16};
+
+      ws[SX.utils.encode_cell({r:row,c:0})].s = { font: FONT_DATA, border: BORDER_ALL,
+                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+      ws[SX.utils.encode_cell({r:row,c:1})].s = { font: FONT_DATA, border: BORDER_ALL,
+                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+    }
   }
 
-  return rows;
+  // Row 17: Empty
+  rowHeights[16] = {hpt: 14.25};
+
+  // Row 18: Section 3
+  rowHeights[17] = {hpt: 22};
+  merges.push({s:{r:17,c:0}, e:{r:17,c:1}});
+  ws['A18'].s = { font: FONT_SECTION, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}},
+                alignment: {horizontal:'left', vertical:'center'} };
+
+  // Row 19: Header
+  ws['A19'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+  ws['B19'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+
+  // Rows 20-22: Data
+  for (let i = 20; i <= 22; i++) {
+    const row = i - 1;
+    if (aoa[row]) {
+      const contentLength = (aoa[row][1] || '').length;
+      rowHeights[i-1] = {hpt: contentLength > 50 ? 28 : 16};
+
+      ws[SX.utils.encode_cell({r:row,c:0})].s = { font: FONT_DATA, border: BORDER_ALL,
+                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+      ws[SX.utils.encode_cell({r:row,c:1})].s = { font: FONT_DATA, border: BORDER_ALL,
+                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+    }
+  }
+
+  ws['!merges'] = merges;
+  ws['!rows'] = Object.keys(rowHeights).map(k => rowHeights[parseInt(k)]);
+
+  return ws;
 }
 
 // ═══════════════════════════════════════════
