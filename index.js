@@ -1184,10 +1184,11 @@ function buildValidationRulesSheet(rules, wb) {
 
   const crnGrades = rules.crn && rules.crn[0] ? rules.crn[0].grades.join(', ') : 'A+, A, B+, B, C+, C, D+, D';
   rows.push(['적용 Grade', crnGrades]);
-  rows.push(['Storage 우선 여부', 'Y (storage별 차이 있음, Eligibility 파일 참조)']);
+  rows.push(['Storage 구분 여부', 'Y (storage별 상이, Eligibility 파일 참조)']);
 
-  const crnPrefixes = rules.crn ? rules.crn.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25, GALAXY Z FOLD, GALAXY Z FLIP';
-  rows.push(['모델 명 (Model Prefixes)', crnPrefixes]);
+  const crnPrefixes = (rules.crn || []).map(r => r.prefix).filter(p => p).join(', ');
+  const crnPrefixesDisplay = crnPrefixes || 'GALAXY S23, GALAXY S24, GALAXY S25, GALAXY Z FLIP5, GALAXY Z FLIP6, GALAXY Z FLIP7, GALAXY Z FOLD5, GALAXY Z FOLD6, GALAXY Z FOLD7';
+  rows.push(['대상 모델 (Model Prefixes)', crnPrefixesDisplay]);
 
   rows.push(['', '']);
 
@@ -1197,22 +1198,52 @@ function buildValidationRulesSheet(rules, wb) {
 
   const refGrades = rules.refurbish && rules.refurbish[0] ? rules.refurbish[0].grades.join(', ') : 'A+, B+, C+';
   rows.push(['적용 Grade', refGrades]);
-  rows.push(['Storage 우선 여부', 'N (storage 무관하게 고정 Grade 적용)']);
+  rows.push(['Storage 구분 여부', 'N (storage 무관 고정 Grade 적용)']);
 
-  const refPrefixes = rules.refurbish ? rules.refurbish.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25';
-  rows.push(['모델 명 (Model Prefixes)', refPrefixes]);
+  const refPrefixes = (rules.refurbish || []).map(r => r.prefix).filter(p => p).join(', ');
+  const refPrefixesDisplay = refPrefixes || 'GALAXY S21, GALAXY S22, GALAXY S23, GALAXY S24, GALAXY S25, GALAXY S26, GALAXY NOTE20, GALAXY Z FLIP5, GALAXY Z FLIP6, GALAXY Z FLIP7, GALAXY Z FOLD5, GALAXY Z FOLD6, GALAXY Z FOLD7';
+  rows.push(['대상 모델 (Model Prefixes)', refPrefixesDisplay]);
 
   rows.push(['', '']);
 
   // 4. Recycling 규칙
   rows.push(['4. Recycling 규칙', '']);
   rows.push(['항목', '정의']);
+  rows.push(['R2 Destroy 1', 'Samsung Only: A series N-6+, J/M/F Series, S-series N-8+, A0X-A10, Xcover | Grades: A+~E → Recycling 컬럼에 반영']);
+  rows.push(['R2 Destroy 2', 'All OEMs, All Models (Fail data clear) | Grade: E → Recycling 컬럼에 반영']);
+  rows.push(['Auction', 'Non-CRN/Refurb Eligible (All OEMs) | Grades: A/A+, B/B+, C/C+, D/D+ → Recycling 컬럼에 반영']);
+  rows.push(['Auction 미적용 대상 모델 (R2 Destroy만 적용)', 'GALAXY S10, GALAXY S20, GALAXY S21, GALAXY S22, GALAXY S23, GALAXY S24, GALAXY S25, GALAXY S26, GALAXY NOTE10, GALAXY NOTE20, GALAXY Z, SM-F, SM-S9, SM-S7, SM-S8']);
+  rows.push(['Auction 미적용 사유', 'Stock Profiling 실제 데이터 기준: S10세대 이후 / Note10 이후 / Z-series는 Recycling=E만 표시']);
 
-  const recyclingGrades = rules.recycling && rules.recycling[0] ? rules.recycling[0].grades.join(', ') : 'A+, A, B+, B, C+, C, D+, D, E';
-  rows.push(['적용 Grade', recyclingGrades]);
+  rows.push(['', '']);
 
-  const recyclingPrefixes = rules.recycling ? rules.recycling.map(r => r.prefix).filter(p => p).join(', ') : 'All Models';
-  rows.push(['모델 명 (Model Prefixes)', recyclingPrefixes]);
+  // 5. CRN Storage 예외
+  rows.push(['5. CRN Storage 예외 (해당 Storage는 CRN 비대상)', '']);
+  rows.push(['모델', '제외 Storage']);
+  const exclusions = (rules.exclusions || []).filter(e => e.category === 'CRN');
+  if (exclusions.length > 0) {
+    exclusions.forEach(e => rows.push([e.model || '', e.storage || '']));
+  } else {
+    rows.push(['GALAXY S25 ULTRA', '1TB']);
+    rows.push(['GS25 Ultra', '1TB']);
+    rows.push(['SM-S938', '1TB']);
+  }
+
+  rows.push(['', '']);
+
+  // 6. SM 모델번호 매핑 규칙
+  rows.push(['6. SM 모델번호 매핑 규칙', '']);
+  rows.push(['구분', '대상 SM 모델번호']);
+  rows.push(['CRN 대상', 'SM-S921, SM-S931, SM-S936, SM-S937, SM-S938, SM-F731, SM-F741, SM-F946, SM-F958, SM-S721, SM-S731, SAMSUNG-GS23']);
+  rows.push(['Refurbish 대상', 'SM-S921, SM-S931, SM-S936, SM-S937, SM-S938, SM-F731, SM-F741, SM-F946, SM-F958, SM-S721, SM-S731, SM-F936, SAMSUNG-GS23']);
+
+  rows.push(['', '']);
+
+  // 7. 검증 제외 모델 패턴
+  rows.push(['7. 검증 제외 모델 패턴 (와일드카드/비특정 모델)', '']);
+  rows.push(['구분', '패턴']);
+  rows.push(['시작 문자열 일치', 'ANY GALAXY, ANY-GALAXY, ANY ANDROID, ANY-ANDROID, ANY-SMARTPHONE, ANY-OTHER, OTHER SAMSUNG, OTHER ANDROID, GALAXY TAB']);
+  rows.push(['정확히 일치', 'TABLET, GALAXY-TAB-A9, GALAXY-TAB-A9+, ANY-SMARTPHONE']);
 
   const aoa = rows;
   const ws = SX.utils.aoa_to_sheet(aoa);
