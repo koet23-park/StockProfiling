@@ -41,6 +41,7 @@ const DEFAULT_RULES = {
     {prefix:'GALAXY S25',          grades:GRADES_REF},
     {prefix:'GALAXY S25+',         grades:GRADES_REF},
     {prefix:'GALAXY S25 ULTRA',    grades:GRADES_REF},
+    {prefix:'GALAXY S26',          grades:GRADES_REF},
     {prefix:'GALAXY NOTE20',       grades:GRADES_REF},
     {prefix:'GALAXY NOTE20 ULTRA', grades:GRADES_REF},
     {prefix:'GALAXY Z FLIP5',      grades:GRADES_REF},
@@ -911,11 +912,18 @@ function downloadResult() {
 
         if (c === ncols) {
           // AS: Validation_Result
-          cellValue = row.validation_status || '';
-          if (cellValue === 'PASS') {
+          const statusMap = {
+            'PASS': 'OK',
+            'FAIL': 'ERROR',
+            'WARNING': 'ERROR'
+          };
+          const rawStatus = row.validation_status || '';
+          cellValue = statusMap[rawStatus] || rawStatus;
+
+          if (cellValue === 'OK') {
             cellFill = RES_OK_FILL;
             cellFont = { name:'Calibri', sz:11, color:{rgb:'FF1B5E20'}, bold:true };
-          } else if (cellValue === 'FAIL' || cellValue === 'WARNING') {
+          } else if (cellValue === 'ERROR') {
             cellFill = RES_ERROR_FILL;
             cellFont = { name:'Calibri', sz:11, color:{rgb:'FFFFFFFF'}, bold:true };
           }
@@ -992,11 +1000,11 @@ function buildValidationRulesSheet(rules, wb) {
 
   const channels = [
     { name: 'CRN', desc: 'N-1 ~ N-3 (Bar: S25/S24/S23), N ~ N-2 (FF: FF7/FF6/FF5) | Memory Variant Specific: Y | Grades: A/A+, B/B+, C/C+, D/D+' },
-    { name: 'Refurbish', desc: 'N ~ N-5 (Bar: S26/S25/S24/S23/S22/S21), Note20 이전 (제한적) | Memory Variant: N | Grades: A/A+, B/B+, C/C+' },
-    { name: 'Auction', desc: 'Non-CRN/Refurb Eligible (All OEMs) | Grades: A+~C+' },
-    { name: 'R2Destroy1', desc: 'Samsung Only: A series N-6+, J/M/F Series, S-series N-4 이상 | Grades: All' },
-    { name: 'R2Destroy2', desc: 'All OEMs, All Models (Fail data clear) | Grades: All' },
-    { name: 'BuyersRemorse', desc: 'Samsung Only, Allowable Return Window | Grades: A-C' }
+    { name: 'Refurbish', desc: 'N ~ N-5 (Bar: S26/S25/S24/S23/S22/S21), Note20F, FF5+ | Memory Variant Specific: N | Grades: A+, B+, C+' },
+    { name: 'Auction', desc: 'Non-CRN/Refurb Eligible (All OEMs) | Grades: A/A+, B/B+, C/C+, D/D+ → Recycling 컬럼에 반영' },
+    { name: 'R2Destroy1', desc: 'Samsung Only: A series N-6+, J/M/F Series, S-series N-8+, A0X-A10, Xcover | Grades: A+~E → Recycling 컬럼에 반영' },
+    { name: 'R2Destroy2', desc: 'All OEMs, All Models (Fail data clear) | Grade: E → Recycling 컬럼에 반영' },
+    { name: 'BuyersRemorse', desc: 'Samsung Only, Allowable Return Window | Grade matrix 미반영' }
   ];
   channels.forEach(ch => rows.push([ch.name, ch.desc]));
 
@@ -1009,7 +1017,7 @@ function buildValidationRulesSheet(rules, wb) {
 
   const crnGrades = rules.crn && rules.crn[0] ? rules.crn[0].grades.join(', ') : 'A+, A, B+, B, C+, C, D+, D';
   rows.push(['적용 Grade', crnGrades]);
-  rows.push(['Storage 우선 여부', 'Y (storage에 관계없이 Eligibility 동일)']);
+  rows.push(['Storage 우선 여부', 'Y (storage별 차이 있음, Eligibility 파일 참조)']);
 
   const crnPrefixes = rules.crn ? rules.crn.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25, GALAXY Z FOLD, GALAXY Z FLIP';
   rows.push(['모델 명 (Model Prefixes)', crnPrefixes]);
@@ -1022,7 +1030,7 @@ function buildValidationRulesSheet(rules, wb) {
 
   const refGrades = rules.refurbish && rules.refurbish[0] ? rules.refurbish[0].grades.join(', ') : 'A+, B+, C+';
   rows.push(['적용 Grade', refGrades]);
-  rows.push(['Storage 우선 여부', 'N (storage 우선 Grade 적용)']);
+  rows.push(['Storage 우선 여부', 'N (storage 무관하게 고정 Grade 적용)']);
 
   const refPrefixes = rules.refurbish ? rules.refurbish.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25';
   rows.push(['모델 명 (Model Prefixes)', refPrefixes]);
