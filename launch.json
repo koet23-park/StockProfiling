@@ -4,8 +4,9 @@
     {
       "name": "dashboard",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "5500", "--directory", "D:\\0. AI\\Claude\\Stock Profiling ver2"],
-      "port": 5500
+      "runtimeArgs": ["-m", "http.server"],
+      "port": 5500,
+      "autoPort": true
     }
   ]
 }
