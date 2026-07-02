@@ -681,28 +681,15 @@ function profileRow(row, idx) {
     }
   }
 
-  // 3. matched_model 결정: 모델명의 첫 단어 (ACER, ASPIRE 등)
-  let matched_model = '';
+  // 3. matched_model 결정: E열(Actual Model)을 Stock Profiling과 동일하게 사용
+  const actual_model = get(row, 'actual_model');  // E열
+  let matched_model = actual_model || model || marketing || '';
   let match_type = 'skipped';
 
-  if (hasAnyGrade) {
-    const normalizedModel = norm(model || '');
-    const words = normalizedModel.split(/\s+/);
-
-    // 첫 단어가 브랜드인 경우 (ACER, ASPIRE, LG, SAMSUNG 제외)
-    if (words.length > 0) {
-      const first = words[0];
-      if (first !== 'GALAXY' && first !== 'IPHONE' && first !== 'PIXEL') {
-        matched_model = first;
-      }
-    }
-
-    if (matched_model) {
-      match_type = 'direct_rule';
-    } else {
-      matched_model = model || marketing || '';
-      match_type = hasAnyGrade ? 'direct_rule' : 'skipped';
-    }
+  if (matched_model) {
+    match_type = 'direct_rule';
+  } else if (hasAnyGrade) {
+    match_type = 'direct_rule';
   }
 
   // 4. 검증 상태 결정
