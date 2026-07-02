@@ -4,7 +4,17 @@
       "PowerShell(ls -Recurse \"D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\" | where {$_.PSIsContainer -eq $false})",
       "mcp__visualize__show_widget",
       "mcp__Claude_Preview__preview_start",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(ls \"D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\\")",
+      "PowerShell(ls 'D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\')",
+      "PowerShell(Copy-Item 'D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\dashboard.html' 'D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\index.html')",
+      "PowerShell(Copy-Item 'D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\dashboard.js' 'D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\index.js')",
+      "PowerShell(ls 'D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\' -Force)",
+      "PowerShell(New-Item -ItemType Directory -Path 'D:\\\\0. AI\\\\Claude\\\\Stock Profiling ver2\\\\Data   ȯ' -Force)",
+      "PowerShell(python --version 2>&1)",
+      "PowerShell(python -c \"import openpyxl; print\\('openpyxl OK'\\)\" 2>&1)",
+      "Read(//d/0. AI/Claude/Stock Profiling/Data/**)",
+      "Bash(python)"
     ]
   }
 }
