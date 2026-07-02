@@ -787,54 +787,82 @@ function downloadResult() {
   const ci    = findColIdx(originalHeaders);
   const ncols = originalHeaders.length;
   const wb    = SX.utils.book_new();
-  const row1 = [], row2 = [];
-  let seenCat = '';
+
+  // Build row data: Confidential, Headers, Grades, then Data
+  const confRow = Array(ncols).fill(''); confRow[0] = 'Confidential';
+  const headerRow = [...originalHeaders];
+  const gradeRow = Array(ncols).fill('');
+  let lastGradeCat = '';
   for (let i = 0; i < ncols; i++) {
     const gi = _gradeColMap[i];
     if (gi) {
-      row1.push(gi.category === seenCat ? '' : gi.category); seenCat = gi.category;
-      row2.push(gi.grade);
-    } else { row1.push(originalHeaders[i]); row2.push(''); seenCat = ''; }
+      gradeRow[i] = gi.grade;
+      lastGradeCat = gi.category;
+    }
   }
-  const confRow = Array(ncols).fill(''); confRow[0] = 'Confidential';
-  const aoa = [confRow, row1, row2, ...processedRows.map(r => r.row.map(v => v ?? ''))];
+
+  const aoa = [confRow, headerRow, gradeRow, ...processedRows.map(r => r.row.map(v => v ?? ''))];
   const ws  = SX.utils.aoa_to_sheet(aoa);
+
+  // Build merges
   const merges = [];
+  // Row 1: Confidential spans all columns
   merges.push({ s:{r:0,c:0}, e:{r:0,c:ncols-1} });
-  for (let c = 0; c < ncols; c++) {
-    if (!_gradeColMap[c]) merges.push({ s:{r:1,c}, e:{r:2,c} });
-  }
+
+  // Row 2 (headers): merge grade category headers
   let gS=-1, gC='';
   for (let c = 0; c <= ncols; c++) {
     const gi = c < ncols ? _gradeColMap[c] : null;
     if (gi && gi.category === gC) continue;
-    if (gS >= 0) merges.push({ s:{r:1,c:gS}, e:{r:1,c:c-1} });
-    gS = gi ? c : -1; gC = gi ? gi.category : '';
+    if (gS >= 0 && gC) merges.push({ s:{r:1,c:gS}, e:{r:1,c:c-1} });
+    gS = gi ? c : -1;
+    gC = gi ? gi.category : '';
   }
+  // Merge non-grade headers (row 2-3)
+  for (let c = 0; c < ncols; c++) {
+    if (!_gradeColMap[c]) merges.push({ s:{r:1,c}, e:{r:2,c} });
+  }
+
   ws['!merges'] = merges;
+
+  // Styling
   const THIN      = { style:'thin', color:{ auto:1 } };
   const BORD      = { top:THIN, bottom:THIN, left:THIN, right:THIN };
-  const FONT      = { name:'Calibri', sz:11 };
-  const FONT_B    = { name:'Calibri', sz:11, bold:true };
+  const FONT      = { name:'Roboto', sz:9 };
+  const FONT_B    = { name:'Roboto', sz:9, bold:true };
+  const FONT_CONF = { name:'Arial', sz:18, italic:false };
   const NO_FILL   = { patternType:'none' };
   const WHITE     = { patternType:'solid', fgColor:{ rgb:'FFFFFF' } };
   const DATA_FILL = { patternType:'solid', fgColor:{ rgb:'EFF8FF' } };
   const ERR_FILL  = { patternType:'solid', fgColor:{ rgb:'FFC000' } };
+
   const gradeIdxs = Object.keys(_gradeColMap).map(Number);
   const firstGradeIdx = gradeIdxs.length > 0 ? Math.min(...gradeIdxs) : Infinity;
+
+  // Row 1: Confidential
   for (let c = 0; c < ncols; c++) {
     const ref = SX.utils.encode_cell({r:0,c});
     if (!ws[ref]) ws[ref] = {v:'',t:'s'};
-    ws[ref].s = { fill:WHITE, font:{...FONT,italic:true}, border:BORD, alignment:{horizontal:'left',vertical:'center'} };
+    ws[ref].s = { fill:WHITE, font:FONT_CONF, border:BORD, alignment:{horizontal:'left',vertical:'center'} };
   }
-  for (let r = 1; r < 3; r++)
-    for (let c = 0; c < ncols; c++) {
-      const ref = SX.utils.encode_cell({r,c});
-      if (!ws[ref]) ws[ref] = {v:'',t:'s'};
-      const gi = _gradeColMap[c];
-      ws[ref].s = { fill:NO_FILL, font:FONT_B, border:BORD,
-                    alignment:{horizontal: gi||r===1 ? 'center':'left', vertical:'center'} };
-    }
+
+  // Row 2: Headers
+  for (let c = 0; c < ncols; c++) {
+    const ref = SX.utils.encode_cell({r:1,c});
+    if (!ws[ref]) ws[ref] = {v:'',t:'s'};
+    ws[ref].s = { fill:NO_FILL, font:FONT_B, border:BORD,
+                  alignment:{horizontal:'center',vertical:'center'} };
+  }
+
+  // Row 3: Grades
+  for (let c = 0; c < ncols; c++) {
+    const ref = SX.utils.encode_cell({r:2,c});
+    if (!ws[ref]) ws[ref] = {v:'',t:'s'};
+    ws[ref].s = { fill:NO_FILL, font:FONT_B, border:BORD,
+                  alignment:{horizontal:_gradeColMap[c]?'center':'left',vertical:'center'} };
+  }
+
+  // Data rows
   processedRows.forEach((row, rowIdx) => {
     const modelName     = ci.model_name     >= 0 ? String(row.row[ci.model_name]     || '') : '';
     const marketingName = ci.marketing_name >= 0 ? String(row.row[ci.marketing_name] || '') : '';
@@ -853,6 +881,7 @@ function downloadResult() {
                     alignment:{ horizontal: gi ? 'center':'left', vertical:'center' } };
     }
   });
+
   ws['!cols'] = Array.from({length:ncols}, (_,i) => ({ wch: ORIG_COL_WIDTHS[i] ?? 10 }));
   ws['!rows'] = [{hpt:37.5},{hpt:18},{hpt:18},...Array(processedRows.length).fill({hpt:14.25})];
   SX.utils.book_append_sheet(wb, ws, 'Stock Profiling');
