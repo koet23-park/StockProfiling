@@ -788,17 +788,13 @@ function downloadResult() {
   const ncols = originalHeaders.length;
   const wb    = SX.utils.book_new();
 
-  // Build row data: Confidential, Headers, Grades, then Data
+  // ===== SHEET 1: Stock Profiling Results =====
   const confRow = Array(ncols).fill(''); confRow[0] = 'Confidential';
   const headerRow = [...originalHeaders];
   const gradeRow = Array(ncols).fill('');
-  let lastGradeCat = '';
   for (let i = 0; i < ncols; i++) {
     const gi = _gradeColMap[i];
-    if (gi) {
-      gradeRow[i] = gi.grade;
-      lastGradeCat = gi.category;
-    }
+    if (gi) gradeRow[i] = gi.grade;
   }
 
   const aoa = [confRow, headerRow, gradeRow, ...processedRows.map(r => r.row.map(v => v ?? ''))];
@@ -806,10 +802,8 @@ function downloadResult() {
 
   // Build merges
   const merges = [];
-  // Row 1: Confidential spans all columns
   merges.push({ s:{r:0,c:0}, e:{r:0,c:ncols-1} });
 
-  // Row 2 (headers): merge grade category headers
   let gS=-1, gC='';
   for (let c = 0; c <= ncols; c++) {
     const gi = c < ncols ? _gradeColMap[c] : null;
@@ -818,7 +812,6 @@ function downloadResult() {
     gS = gi ? c : -1;
     gC = gi ? gi.category : '';
   }
-  // Merge non-grade headers (row 2-3)
   for (let c = 0; c < ncols; c++) {
     if (!_gradeColMap[c]) merges.push({ s:{r:1,c}, e:{r:2,c} });
   }
@@ -885,8 +878,101 @@ function downloadResult() {
   ws['!cols'] = Array.from({length:ncols}, (_,i) => ({ wch: ORIG_COL_WIDTHS[i] ?? 10 }));
   ws['!rows'] = [{hpt:37.5},{hpt:18},{hpt:18},...Array(processedRows.length).fill({hpt:14.25})];
   SX.utils.book_append_sheet(wb, ws, 'Stock Profiling');
+
+  // ===== SHEET 2: Validation Rules =====
+  const rules = collectRules();
+  const rulesAoa = buildValidationRulesSheet(rules);
+  const rulesWs = SX.utils.aoa_to_sheet(rulesAoa);
+  rulesWs['!cols'] = [{wch:30},{wch:80}];
+  SX.utils.book_append_sheet(wb, rulesWs, 'Validation_Rules');
+
   const ts = new Date().toISOString().slice(0,19).replace(/[-T:]/g,'').replace(/(\d{8})(\d{6})/, '$1_$2');
   SX.writeFile(wb, `Stock_Profiling_Result_${ts}.xlsx`);
+}
+
+function buildValidationRulesSheet(rules) {
+  const rows = [];
+  const EMPTY = ['', ''];
+
+  // Title
+  rows.push(['Stock Profiling 검증 규칙 정의', '']);
+  rows.push(EMPTY);
+
+  // 1. Channel Definitions
+  rows.push(['1. 채널 정의 (Channel Definitions)', '']);
+  rows.push(['채널', '정의']);
+
+  const channels = [
+    { name: 'CRN', desc: 'N-1 ~ N-3 (Bar: S25/S24/S23), N ~ N-2 (FF: FF7/FF6/FF5) | Memory Variant Specific: Y | Grades: A/A+, B/B+, C/C+, D/D+' },
+    { name: 'Refurbish', desc: 'N ~ N-5 (Bar: S26/S25/S24/S23/S22/S21), Note20 이전 (제한적) | Memory Variant: N | Grades: A/A+, B/B+, C/C+' },
+    { name: 'Auction', desc: 'Non-CRN/Refurb Eligible (All OEMs) | Grades: A+~C+' },
+    { name: 'R2Destroy1', desc: 'Samsung Only: A series N-6+, J/M/F Series, S-series N-4 이상 | Grades: All' },
+    { name: 'R2Destroy2', desc: 'All OEMs, All Models (Fail data clear) | Grades: All' },
+    { name: 'BuyersRemorse', desc: 'Samsung Only, Allowable Return Window | Grades: A-C' }
+  ];
+  channels.forEach(ch => rows.push([ch.name, ch.desc]));
+
+  rows.push(EMPTY);
+
+  // 2. CRN 규칙
+  rows.push(['2. CRN 규칙', '']);
+  rows.push(['항목', '정의']);
+
+  const crnGrades = rules.crn && rules.crn[0] ? rules.crn[0].grades.join(', ') : 'A+, A, B+, B, C+, C, D+, D';
+  rows.push(['적용 Grade', crnGrades]);
+  rows.push(['Storage 우선 여부', 'Y (storage에 관계없이 Eligibility 동일)']);
+
+  const crnPrefixes = rules.crn ? rules.crn.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25, GALAXY Z FOLD, GALAXY Z FLIP';
+  rows.push(['모델 명 (Model Prefixes)', crnPrefixes]);
+
+  rows.push(EMPTY);
+
+  // 3. Refurbish 규칙
+  rows.push(['3. Refurbish 규칙', '']);
+  rows.push(['항목', '정의']);
+
+  const refGrades = rules.refurbish && rules.refurbish[0] ? rules.refurbish[0].grades.join(', ') : 'A+, B+, C+';
+  rows.push(['적용 Grade', refGrades]);
+  rows.push(['Storage 우선 여부', 'N (storage 우선 Grade 적용)']);
+
+  const refPrefixes = rules.refurbish ? rules.refurbish.map(r => r.prefix).filter(p => p).join(', ') : 'GALAXY S23, GALAXY S24, GALAXY S25';
+  rows.push(['모델 명 (Model Prefixes)', refPrefixes]);
+
+  rows.push(EMPTY);
+
+  // 4. Recycling 규칙
+  rows.push(['4. Recycling 규칙', '']);
+  rows.push(['항목', '정의']);
+
+  const recyclingGrades = rules.recycling && rules.recycling[0] ? rules.recycling[0].grades.join(', ') : 'A+, A, B+, B, C+, C, D+, D, E';
+  rows.push(['적용 Grade', recyclingGrades]);
+
+  const recyclingPrefixes = rules.recycling ? rules.recycling.map(r => r.prefix).filter(p => p).join(', ') : 'All Models';
+  rows.push(['모델 명 (Model Prefixes)', recyclingPrefixes]);
+
+  rows.push(EMPTY);
+
+  // 5. 제외 규칙
+  rows.push(['5. 제외 규칙', '']);
+  rows.push(['Model', 'Storage', 'Category', '']);
+  if (rules.exclusions) {
+    rules.exclusions.forEach(excl => {
+      rows.push([excl.model || '', excl.storage || '', excl.category || '', '']);
+    });
+  }
+
+  rows.push(EMPTY);
+
+  // 6. 카테고리 키워드
+  rows.push(['6. 카테고리 키워드', '']);
+  rows.push(['Keyword', 'Category', '']);
+  if (rules.categoryKeywords) {
+    rules.categoryKeywords.forEach(kw => {
+      rows.push([kw.keyword || '', kw.category || '', '']);
+    });
+  }
+
+  return rows;
 }
 
 // ═══════════════════════════════════════════
