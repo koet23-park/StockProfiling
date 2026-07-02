@@ -681,7 +681,10 @@ function profileRow(row, idx) {
     }
   }
 
-  // 3. matched_model 결정: E열(Actual Model)을 Stock Profiling과 동일하게 사용
+  // 3. 규칙 기반 expected grades 계산
+  const expected = getExpectedGrades(model, storage, marketing, manufacturer);
+
+  // 4. matched_model 결정: E열(Actual Model)을 Stock Profiling과 동일하게 사용
   const actual_model = get(row, 'actual_model');  // E열
   let matched_model = actual_model || model || marketing || '';
   let match_type = 'skipped';
@@ -692,21 +695,44 @@ function profileRow(row, idx) {
     match_type = 'direct_rule';
   }
 
-  // 4. 검증 상태 결정 (Stock Profiling: E열(actual_model) 있으면 OK)
+  // 5. 검증 상태 결정 (Stock Profiling: E열(actual_model) 있으면 기본 OK)
   let validation_status = 'OK';
   let errors = [];
-
-  // Stock Profiling 기준: actual_model (E열)이 있으면 기본적으로 OK
-  // SKU 검증은 추가 정보로만 사용
-  if (!sku) {
-    errors.push('SKU 누락');
-    // SKU 누락만으로는 ERROR를 일으키지 않음 (actual_model이 있으면 OK)
-  }
 
   // actual_model이 없으면 ERROR
   if (!actual_model) {
     errors.push('모델 정보 누락');
     validation_status = 'ERROR';
+  }
+
+  // SKU 검증 (정보용, 자동으로 ERROR는 아님)
+  if (!sku) {
+    errors.push('SKU 누락');
+  }
+
+  // M~AM 컬럼 vs expected grades 검증: 불일치 → ERROR
+  const gradeErrors = [];
+  for (let i = 0; i < originalHeaders.length; i++) {
+    const gradeInfo = _gradeColMap[i];
+    if (!gradeInfo) continue;
+
+    const cellValue = String(row[i] || '').trim().toUpperCase();
+    const isY = cellValue === 'Y';
+    const expectedSet = expected[gradeInfo.category];
+    const shouldBeY = expectedSet && expectedSet.has(gradeInfo.grade);
+
+    // 불일치 검출
+    if (shouldBeY && !isY) {
+      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=Y, actual=N`);
+    }
+    if (!shouldBeY && isY) {
+      gradeErrors.push(`${gradeInfo.category} ${gradeInfo.grade}: expected=N, actual=Y`);
+    }
+  }
+
+  if (gradeErrors.length > 0) {
+    validation_status = 'ERROR';
+    errors.push(...gradeErrors);
   }
 
   // 5. 점수 계산 (UI용, 기존 로직 유지)
