@@ -789,20 +789,33 @@ function downloadResult() {
   const wb    = SX.utils.book_new();
 
   // ===== SHEET 1: Stock Profiling Results =====
-  const confRow = Array(ncols).fill(''); confRow[0] = 'Confidential';
-  const headerRow = [...originalHeaders];
-  const gradeRow = Array(ncols).fill('');
+  const confRow = Array(ncols + 5).fill(''); confRow[0] = 'Confidential';
+  const headerRow = [...originalHeaders, 'Validation_Result', 'Expected_Value', 'Error_Reason', 'Matched_Eligibility_Model', 'Match_Type'];
+  const gradeRow = Array(ncols + 5).fill('');
   for (let i = 0; i < ncols; i++) {
     const gi = _gradeColMap[i];
     if (gi) gradeRow[i] = gi.grade;
   }
 
-  const aoa = [confRow, headerRow, gradeRow, ...processedRows.map(r => r.row.map(v => v ?? ''))];
+  const aoa = [
+    confRow,
+    headerRow,
+    gradeRow,
+    ...processedRows.map((prow, idx) => {
+      const dataRow = [...prow.row.map(v => v ?? '')];
+      dataRow.push(prow.validation_status || 'N/A');    // AS: Validation_Result
+      dataRow.push('');                                   // AT: Expected_Value
+      dataRow.push(prow.error_reason || '');             // AU: Error_Reason
+      dataRow.push(prow.model_category || '');           // AV: Matched_Eligibility_Model
+      dataRow.push(prow.profiling_score || '');          // AW: Match_Type (실제로는 점수)
+      return dataRow;
+    })
+  ];
   const ws  = SX.utils.aoa_to_sheet(aoa);
 
   // Build merges
   const merges = [];
-  merges.push({ s:{r:0,c:0}, e:{r:0,c:ncols-1} });
+  merges.push({ s:{r:0,c:0}, e:{r:0,c:ncols+4} });
 
   let gS=-1, gC='';
   for (let c = 0; c <= ncols; c++) {
@@ -815,6 +828,10 @@ function downloadResult() {
   for (let c = 0; c < ncols; c++) {
     if (!_gradeColMap[c]) merges.push({ s:{r:1,c}, e:{r:2,c} });
   }
+  // Result columns merge with row 3 (single row header)
+  for (let c = ncols; c < ncols + 5; c++) {
+    merges.push({ s:{r:1,c}, e:{r:2,c} });
+  }
 
   ws['!merges'] = merges;
 
@@ -824,10 +841,14 @@ function downloadResult() {
   const FONT      = { name:'Roboto', sz:9 };
   const FONT_B    = { name:'Roboto', sz:9, bold:true };
   const FONT_CONF = { name:'Arial', sz:18, italic:false };
+  const FONT_RES_HEADER = { name:'Default', sz:11, bold:true, color:{rgb:'FFFFFFFF'} };
+  const FONT_RES_OK = { name:'Default', sz:11 };
   const NO_FILL   = { patternType:'none' };
   const WHITE     = { patternType:'solid', fgColor:{ rgb:'FFFFFF' } };
   const DATA_FILL = { patternType:'solid', fgColor:{ rgb:'EFF8FF' } };
   const ERR_FILL  = { patternType:'solid', fgColor:{ rgb:'FFC000' } };
+  const RES_HEADER_FILL = { patternType:'solid', fgColor:{ rgb:'FF1565C0' } };
+  const RES_OK_FILL = { patternType:'solid', fgColor:{ rgb:'FFC8E6C9' } };
 
   const gradeIdxs = Object.keys(_gradeColMap).map(Number);
   const firstGradeIdx = gradeIdxs.length > 0 ? Math.min(...gradeIdxs) : Infinity;
@@ -840,11 +861,17 @@ function downloadResult() {
   }
 
   // Row 2: Headers
-  for (let c = 0; c < ncols; c++) {
+  for (let c = 0; c < ncols + 5; c++) {
     const ref = SX.utils.encode_cell({r:1,c});
     if (!ws[ref]) ws[ref] = {v:'',t:'s'};
-    ws[ref].s = { fill:NO_FILL, font:FONT_B, border:BORD,
-                  alignment:{horizontal:'center',vertical:'center'} };
+    if (c >= ncols) {
+      // Result columns header
+      ws[ref].s = { fill:RES_HEADER_FILL, font:FONT_RES_HEADER, border:NO_FILL,
+                    alignment:{horizontal:'center',vertical:'center'} };
+    } else {
+      ws[ref].s = { fill:NO_FILL, font:FONT_B, border:BORD,
+                    alignment:{horizontal:'center',vertical:'center'} };
+    }
   }
 
   // Row 3: Grades
@@ -861,21 +888,39 @@ function downloadResult() {
     const marketingName = ci.marketing_name >= 0 ? String(row.row[ci.marketing_name] || '') : '';
     const storage       = ci.storage_gb     >= 0 ? String(row.row[ci.storage_gb]     || '') : '';
     const expected      = getExpectedGrades(modelName, storage, marketingName);
-    for (let c = 0; c < ncols; c++) {
+    for (let c = 0; c < ncols + 5; c++) {
       const ref = SX.utils.encode_cell({r: 3 + rowIdx, c});
-      if (!ws[ref]) ws[ref] = { v: row.row[c]??'', t:'s' };
-      const gi = _gradeColMap[c];
-      let fill = (c < firstGradeIdx && !gi) ? DATA_FILL : NO_FILL;
-      if (gi) {
-        const cls = getGradeCellClass(gi, row.row[c], expected);
-        if (cls === 'grade-err-missing' || cls === 'grade-err-extra') fill = ERR_FILL;
+      if (c < ncols) {
+        if (!ws[ref]) ws[ref] = { v: row.row[c]??'', t:'s' };
+        const gi = _gradeColMap[c];
+        let fill = (c < firstGradeIdx && !gi) ? DATA_FILL : NO_FILL;
+        if (gi) {
+          const cls = getGradeCellClass(gi, row.row[c], expected);
+          if (cls === 'grade-err-missing' || cls === 'grade-err-extra') fill = ERR_FILL;
+        }
+        ws[ref].s = { fill, font:FONT, border:BORD,
+                      alignment:{ horizontal: gi ? 'center':'left', vertical:'center' } };
+      } else {
+        // Result columns
+        let cellValue = '';
+        if (c === ncols) cellValue = row.validation_status || '';
+        else if (c === ncols + 1) cellValue = '';
+        else if (c === ncols + 2) cellValue = row.error_reason || '';
+        else if (c === ncols + 3) cellValue = row.model_category || '';
+        else if (c === ncols + 4) cellValue = row.profiling_score || '';
+
+        if (!ws[ref]) ws[ref] = { v: cellValue, t:'s' };
+        const fill = (c === ncols && row.validation_status === 'PASS') ? RES_OK_FILL : NO_FILL;
+        const font = (c === ncols) ? FONT_RES_OK : FONT;
+        ws[ref].s = { fill, font, border:NO_FILL,
+                      alignment:{ horizontal: c === ncols ? 'center':'left', vertical:'top' } };
       }
-      ws[ref].s = { fill, font:FONT, border:BORD,
-                    alignment:{ horizontal: gi ? 'center':'left', vertical:'center' } };
     }
   });
 
-  ws['!cols'] = Array.from({length:ncols}, (_,i) => ({ wch: ORIG_COL_WIDTHS[i] ?? 10 }));
+  const colWidths = Array.from({length:ncols}, (_,i) => ({ wch: ORIG_COL_WIDTHS[i] ?? 10 }));
+  colWidths.push({wch:20}, {wch:15}, {wch:30}, {wch:25}, {wch:15}); // AS, AT, AU, AV, AW
+  ws['!cols'] = colWidths;
   ws['!rows'] = [{hpt:37.5},{hpt:18},{hpt:18},...Array(processedRows.length).fill({hpt:14.25})];
   SX.utils.book_append_sheet(wb, ws, 'Stock Profiling');
 
