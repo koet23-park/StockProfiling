@@ -382,13 +382,34 @@ td.row-result,th.row-result{text-align:center;width:52px;min-width:52px;backgrou
   <div class="rules-header">
     <div>
       <h2>⚙️ 규칙 관리</h2>
-      <p style="font-size:12px;color:var(--text-sub);margin-top:4px;">CRN · Refurbish · Recycling 분류 규칙을 직접 수정합니다. 변경사항은 브라우저에 저장됩니다.</p>
+      <p style="font-size:12px;color:var(--text-sub);margin-top:4px;">실제 검증에 사용되는 규칙을 편집합니다. 아래 "검증 규칙(JSON)"이 실제 검증 엔진에 적용되는 규칙입니다.</p>
     </div>
     <div class="rules-actions">
-      <button class="btn btn-gray" onclick="exportRules()">📤 JSON 내보내기</button>
+      <button class="btn btn-gray" onclick="spExportRules()">📤 JSON 내보내기</button>
       <button class="btn btn-gray" onclick="document.getElementById('importInput').click()">📥 JSON 가져오기</button>
-      <button class="btn btn-gray" onclick="resetRules()">↺ 기본값 복원</button>
-      <input type="file" id="importInput" accept=".json" style="display:none" onchange="importRules(event)">
+      <button class="btn btn-gray" onclick="spResetRules()">↺ 기본값 복원</button>
+      <input type="file" id="importInput" accept=".json" style="display:none" onchange="spImportRules(event)">
+    </div>
+  </div>
+
+  <!-- 실제 검증 규칙 (activeSpData) 에디터 -->
+  <div class="rule-section" id="sec-sprules">
+    <div class="rule-section-header">
+      <div>
+        <div class="rule-title">🧩 검증 규칙 (JSON) — 실제 검증에 적용</div>
+        <div class="rule-desc">
+          Stock Profiling과 100% 일치하는 규칙입니다. 여기서 수정 후 <b>💾 적용</b>하면 이 브라우저의 재검증에 즉시 반영됩니다.<br>
+          모두에게 반영하려면 <b>📤 JSON 내보내기</b>로 받은 <code>rules_override.json</code>을 저장소에 커밋하세요.
+        </div>
+      </div>
+      <button class="btn btn-blue btn-sm" onclick="spApplyRules()">💾 적용 (이 브라우저)</button>
+    </div>
+    <div class="rule-section-body">
+      <div id="spRulesInfo" style="font-size:12px;color:var(--text-sub);margin-bottom:6px;"></div>
+      <textarea id="spRulesEditor" spellcheck="false"
+        style="width:100%;height:280px;font-family:'Consolas','D2Coding',monospace;font-size:12px;line-height:1.45;
+               border:1px solid var(--border,#d0d5dd);border-radius:8px;padding:10px;resize:vertical;white-space:pre;overflow:auto;"></textarea>
+      <div style="margin-top:6px;"><span class="save-hint" id="spSaveHint">수정 후 "💾 적용"을 누르면 이 브라우저에 저장됩니다.</span></div>
     </div>
   </div>
 

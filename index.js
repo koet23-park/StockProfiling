@@ -348,6 +348,7 @@ function switchPage(name, btn) {
   if (name === 'rules') {
     renderRuleTables(activeRules);
     renderCurRulesSummary(activeRules);
+    spRenderEditor();
   }
 }
 
@@ -688,6 +689,13 @@ function get(row, key) {
 const SP_GRADE_COLS = ['A+','A','B+','B','C+','C','D+','D','E'];
 const SP_CATEGORIES = ['CRN','Refurbish','Recycling'];
 
+// 검증에 실제 사용하는 규칙 데이터(live).
+// 기본값 = 내장본(validation_data.js) 복제 → 오버라이드 없으면 Stock Profiling과 100% 동일.
+// 시작 시 커밋된 rules_override.json / localStorage 가 있으면 이 변수만 교체된다.
+let activeSpData = (typeof window !== 'undefined' && window.SP_VALIDATION_DATA)
+  ? JSON.parse(JSON.stringify(window.SP_VALIDATION_DATA))
+  : null;
+
 function spNorm(name) {
   return String(name||'').trim().toLowerCase().replace(/\s+/g,' ');
 }
@@ -705,7 +713,7 @@ function spMatchesPrefix(modelUpper, prefixes) {
 }
 
 function spShouldSkip(actualModel) {
-  const D = window.SP_VALIDATION_DATA;
+  const D = activeSpData;
   if (!D) return false;
   const m = String(actualModel||'').toUpperCase().trim();
   const skip = D.skip_model_patterns || {startswith:[], exact:[]};
@@ -715,7 +723,7 @@ function spShouldSkip(actualModel) {
 }
 
 function spLookupCrnGrades(actualModel, storage) {
-  const D = window.SP_VALIDATION_DATA;
+  const D = activeSpData;
   const crnCfg = D.direct_rules.CRN;
   const defaultGrades = new Set(crnCfg.grades);
   const nameMapping = D.model_name_mapping || {};
@@ -749,7 +757,7 @@ function spLookupCrnGrades(actualModel, storage) {
 }
 
 function spLookupRecyclingGrades(eligModelName, includeAuction) {
-  const D = window.SP_VALIDATION_DATA;
+  const D = activeSpData;
   const key = spNorm(eligModelName);
   const merged = new Set();
   const r2 = D.recycling_r2_map[key];
@@ -762,7 +770,7 @@ function spLookupRecyclingGrades(eligModelName, includeAuction) {
 }
 
 function spPartialRecyclingMatch(actualModel) {
-  const D = window.SP_VALIDATION_DATA;
+  const D = activeSpData;
   const norm = spNorm(actualModel);
   let best = '', bestLen = 0;
   for (const key of Object.keys(D.recycling_r2_map)) {
@@ -775,7 +783,7 @@ function spPartialRecyclingMatch(actualModel) {
 
 // Python get_expected_grades 포팅 → {CRN:{grade:'Y'/'N'}, Refurbish:{}, Recycling:{}, matched_model, match_type}
 function spGetExpectedGrades(actualModel, storage, manufacturer) {
-  const D = window.SP_VALIDATION_DATA;
+  const D = activeSpData;
   const result = {};
   for (const cat of SP_CATEGORIES) {
     result[cat] = {};
@@ -827,7 +835,7 @@ function spGetExpectedGrades(actualModel, storage, manufacturer) {
 
 // 매트릭스 UI용: expected를 {CRN:Set, Refurbish:Set, Recycling:Set} 형태로 변환
 function spExpectedAsSets(actualModel, storage, manufacturer) {
-  if (!window.SP_VALIDATION_DATA) {
+  if (!activeSpData) {
     return { CRN: new Set(), Refurbish: new Set(), Recycling: new Set(), matched_model: actualModel||'', match_type: 'skipped' };
   }
   if (spShouldSkip(actualModel)) {
@@ -842,6 +850,137 @@ function spExpectedAsSets(actualModel, storage, manufacturer) {
     matched_model: exp.matched_model || (actualModel||''),
     match_type: exp.match_type || 'direct_rule'
   };
+}
+
+// ═══════════════════════════════════════════
+// 8-B. SP 규칙(activeSpData) 관리 — 내보내기/가져오기/오버라이드
+//   · 기본값(validation_data.js)은 절대 수정하지 않음
+//   · 오버라이드 우선순위: 내장 기본값 → 커밋된 rules_override.json → localStorage(개인 편집)
+// ═══════════════════════════════════════════
+const SP_LS_KEY = 'stockProfiling_spdata_v1';
+const SP_OVERRIDE_FILE = 'rules_override.json';
+
+function spEmbeddedDefault() {
+  return (typeof window !== 'undefined' && window.SP_VALIDATION_DATA)
+    ? JSON.parse(JSON.stringify(window.SP_VALIDATION_DATA))
+    : null;
+}
+
+// activeSpData가 올바른 SP 규칙 구조인지 최소 검증 (구조 훼손 방지)
+function spIsValidData(obj) {
+  return !!(obj && obj.direct_rules && obj.direct_rules.CRN && obj.direct_rules.Refurbish
+            && obj.skip_model_patterns && obj.recycling_r2_map && obj.recycling_auction_map
+            && obj.crn_storage_map);
+}
+
+// 시작 시 오버라이드 적용: 커밋된 파일 → localStorage 순으로 얹음
+async function spInitOverrides() {
+  // 1) 커밋된 rules_override.json (모두에게 반영되는 채널)
+  try {
+    const res = await fetch('./' + SP_OVERRIDE_FILE, { cache: 'no-store' });
+    if (res.ok) {
+      const json = await res.json();
+      if (spIsValidData(json)) {
+        activeSpData = json;
+        console.info('[rules] rules_override.json 적용됨 (커밋된 공유 규칙)');
+      } else {
+        console.warn('[rules] rules_override.json 구조가 올바르지 않아 무시함');
+      }
+    }
+  } catch (e) { /* 파일 없음 → 내장 기본값 유지 */ }
+
+  // 2) localStorage 개인 편집본 (이 브라우저 한정)
+  try {
+    const saved = localStorage.getItem(SP_LS_KEY);
+    if (saved) {
+      const json = JSON.parse(saved);
+      if (spIsValidData(json)) {
+        activeSpData = json;
+        console.info('[rules] localStorage 개인 규칙 적용됨');
+      }
+    }
+  } catch (e) { /* 무시 */ }
+
+  spRenderEditor();
+}
+
+// 규칙 관리 탭의 JSON 에디터에 현재 activeSpData 표시
+function spRenderEditor() {
+  const ta = document.getElementById('spRulesEditor');
+  if (ta && activeSpData) ta.value = JSON.stringify(activeSpData, null, 2);
+  const info = document.getElementById('spRulesInfo');
+  if (info) info.textContent = spRulesSummaryText();
+}
+
+function spRulesSummaryText() {
+  if (!activeSpData) return '규칙 데이터 없음';
+  const d = activeSpData;
+  const n = o => (o ? Object.keys(o).length : 0);
+  return `CRN 접두어 ${d.direct_rules.CRN.model_prefixes.length} · `
+       + `Refurbish 접두어 ${d.direct_rules.Refurbish.model_prefixes.length} · `
+       + `Recycling R2 ${n(d.recycling_r2_map)} · auction ${n(d.recycling_auction_map)} · `
+       + `CRN storage ${n(d.crn_storage_map)} · skip ${(d.skip_model_patterns.startswith||[]).length + (d.skip_model_patterns.exact||[]).length}`;
+}
+
+// 💾 에디터 내용을 activeSpData에 적용 + localStorage 저장 (이 브라우저에 반영)
+function spApplyRules() {
+  const ta = document.getElementById('spRulesEditor');
+  if (!ta) return;
+  let json;
+  try { json = JSON.parse(ta.value); }
+  catch (e) { showToast('❌ JSON 문법 오류: ' + e.message); return; }
+  if (!spIsValidData(json)) {
+    showToast('❌ 규칙 구조가 올바르지 않습니다 (direct_rules/skip_model_patterns/맵 확인)');
+    return;
+  }
+  activeSpData = json;
+  try { localStorage.setItem(SP_LS_KEY, JSON.stringify(json)); } catch (e) {}
+  spRenderEditor();
+  const hint = document.getElementById('spSaveHint');
+  if (hint) hint.textContent = '✅ 이 브라우저에 저장됨 — ' + new Date().toLocaleTimeString('ko-KR');
+  showToast('💾 규칙이 적용되었습니다. 이제 다시 검증하면 반영됩니다.');
+}
+
+// 📤 현재 규칙을 rules_override.json 으로 내보내기 (저장소에 커밋할 파일)
+function spExportRules() {
+  const ta = document.getElementById('spRulesEditor');
+  let data = activeSpData;
+  if (ta) { try { const j = JSON.parse(ta.value); if (spIsValidData(j)) data = j; } catch (e) {} }
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = SP_OVERRIDE_FILE;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  showToast('📤 ' + SP_OVERRIDE_FILE + ' 저장 완료 — 이 파일을 저장소에 커밋하면 모두에게 반영됩니다.');
+}
+
+// 📥 JSON 파일 가져오기 → 에디터/activeSpData/localStorage 반영
+function spImportRules(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const json = JSON.parse(e.target.result);
+      if (!spIsValidData(json)) { showToast('❌ 규칙 구조가 올바르지 않습니다.'); return; }
+      activeSpData = json;
+      try { localStorage.setItem(SP_LS_KEY, JSON.stringify(json)); } catch (er) {}
+      spRenderEditor();
+      showToast('📥 규칙을 가져와 적용했습니다. 다시 검증하면 반영됩니다.');
+    } catch (er) { showToast('❌ JSON 파싱 오류: ' + er.message); }
+    event.target.value = '';
+  };
+  reader.readAsText(file);
+}
+
+// ↺ 기본값(내장 validation_data.js)으로 복원 + localStorage 개인 편집 제거
+function spResetRules() {
+  if (!confirm('내장 기본 규칙으로 복원하시겠습니까? 이 브라우저의 개인 편집본이 삭제됩니다.\n(커밋된 rules_override.json 이 있으면 새로고침 시 다시 적용됩니다.)')) return;
+  try { localStorage.removeItem(SP_LS_KEY); } catch (e) {}
+  activeSpData = spEmbeddedDefault();
+  spRenderEditor();
+  showToast('↺ 내장 기본 규칙으로 복원되었습니다.');
 }
 
 function profileRow(row, idx) {
@@ -875,7 +1014,7 @@ function profileRow(row, idx) {
   let match_type = 'direct_rule';
   const errors = [];
 
-  const dataReady = !!window.SP_VALIDATION_DATA;
+  const dataReady = !!activeSpData;
 
   if (dataReady && spShouldSkip(actual_model)) {
     // 와일드카드/비특정 모델은 검증 건너뜀 → OK
@@ -1259,16 +1398,16 @@ function downloadResult() {
   // Styling
   const THIN      = { style:'thin', color:{ auto:1 } };
   const BORD      = { top:THIN, bottom:THIN, left:THIN, right:THIN };
-  const FONT      = { name:'Roboto', sz:9 };
-  const FONT_B    = { name:'Roboto', sz:9, bold:true };
-  const FONT_CONF = { name:'Arial', sz:18, italic:false };
+  const FONT      = { name:'Roboto', sz:9, color:{rgb:'FF333333'} };
+  const FONT_B    = { name:'Roboto', sz:9, bold:true, color:{rgb:'FF000000'} };
+  const FONT_CONF = { name:'Arial', sz:18, italic:false, color:{rgb:'FFFF0000'} };
   const FONT_RES_HEADER = { name:'Calibri', sz:11, bold:true, color:{rgb:'FFFFFFFF'} };
   const FONT_RES_OK = { name:'Calibri', sz:11 };
   const FONT_RES_ERROR = { name:'Calibri', sz:11, color:{rgb:'FFC62828'}, bold:true };
   const NO_FILL   = { patternType:'none' };
   const WHITE     = { patternType:'solid', fgColor:{ rgb:'FFFFFF' } };
   const DATA_FILL = { patternType:'solid', fgColor:{ rgb:'EFF8FF' } };
-  const ERR_FILL  = { patternType:'solid', fgColor:{ rgb:'FFC000' } };
+  const ERR_FILL  = { patternType:'solid', fgColor:{ rgb:'FFE0B2' } };
   const RES_HEADER_FILL = { patternType:'solid', fgColor:{ rgb:'FF1565C0' } };
   const RES_OK_FILL = { patternType:'solid', fgColor:{ rgb:'FFC8E6C9' } };
   const RES_ERROR_FILL = { patternType:'solid', fgColor:{ rgb:'FFFF0000' } };
@@ -1308,10 +1447,10 @@ function downloadResult() {
 
   // Data rows
   processedRows.forEach((row, rowIdx) => {
-    const modelName     = ci.model_name     >= 0 ? String(row.row[ci.model_name]     || '') : '';
-    const marketingName = ci.marketing_name >= 0 ? String(row.row[ci.marketing_name] || '') : '';
-    const storage       = ci.storage_gb     >= 0 ? String(row.row[ci.storage_gb]     || '') : '';
-    const expected      = getExpectedGrades(modelName, storage, marketingName);
+    const actualModel  = ci.actual_model >= 0 ? String(row.row[ci.actual_model] || '') : '';
+    const storage      = ci.storage_gb   >= 0 ? String(row.row[ci.storage_gb]   || '') : '';
+    const manufacturer = ci.manufacturer >= 0 ? String(row.row[ci.manufacturer] || '') : '';
+    const expected     = spExpectedAsSets(actualModel, storage, manufacturer);
     for (let c = 0; c < ncols + 5; c++) {
       const ref = SX.utils.encode_cell({r: 3 + rowIdx, c});
       if (c < ncols) {
@@ -1369,14 +1508,14 @@ function downloadResult() {
         }
 
         if (!ws[ref]) ws[ref] = { v: cellValue, t:'s' };
-        ws[ref].s = { fill:cellFill, font:cellFont, border:NO_FILL,
-                      alignment:{ horizontal: c === ncols ? 'center':'left', vertical:'top' } };
+        // 결과 컬럼(AS~AW)은 정상 파일과 동일하게 별도 정렬 지정 안 함 (기본값)
+        ws[ref].s = { fill:cellFill, font:cellFont, border:NO_FILL };
       }
     }
   });
 
   const colWidths = Array.from({length:ncols}, (_,i) => ({ wch: ORIG_COL_WIDTHS[i] ?? 10 }));
-  colWidths.push({wch:20}, {wch:15}, {wch:30}, {wch:25}, {wch:15}); // AS, AT, AU, AV, AW
+  colWidths.push({wch:28}, {wch:28}, {wch:28}, {wch:28}, {wch:28}); // AS, AT, AU, AV, AW (정상 파일과 동일)
   ws['!cols'] = colWidths;
   ws['!rows'] = [{hpt:37.5},{hpt:18},{hpt:18},...Array(processedRows.length).fill({hpt:14.25})];
   SX.utils.book_append_sheet(wb, ws, 'Stock Profiling');
@@ -1504,103 +1643,65 @@ function buildValidationRulesSheet(rules, wb) {
   // Column widths
   ws['!cols'] = [{wch:30}, {wch:95}];
 
-  // Row heights and styling
+  // Row heights and styling — 모든 행을 유형별로 자동 분류하여 서식 적용
+  // (섹션 1~7 전체에 동일한 톤앤매너 적용)
   const merges = [];
-  const rowHeights = {};
+  const rowHeights = [];
+  const enc = (r, c) => SX.utils.encode_cell({ r, c });
+  const isSectionTitle = a => /^\d+\.\s/.test(String(a || ''));
 
-  // Row 1: Title
-  rowHeights[0] = {hpt: 22}; // Default height for title
-  ws['A1'].s = { font: FONT_TITLE, alignment: { horizontal: 'left', vertical: 'bottom' } };
+  let expectHeader = false;   // 섹션 제목 바로 다음 행 = 컬럼 헤더
+  aoa.forEach((r, idx) => {
+    const a = r[0], b = r[1];
+    const aEmpty = String(a ?? '').trim() === '';
+    const bEmpty = String(b ?? '').trim() === '';
+    const A = enc(idx, 0), B = enc(idx, 1);
+    if (!ws[A]) ws[A] = { v:'', t:'s' };
+    if (!ws[B]) ws[B] = { v:'', t:'s' };
 
-  // Row 2: Empty
-  rowHeights[1] = {hpt: 14.25};
-
-  // Row 3: Section 1
-  rowHeights[2] = {hpt: 22};
-  merges.push({s:{r:2,c:0}, e:{r:2,c:1}});
-  ws['A3'].s = { font: FONT_SECTION, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}},
-                alignment: {horizontal:'left', vertical:'center'} };
-
-  // Row 4: Header
-  ws['A4'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
-                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
-  ws['B4'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
-                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
-
-  // Rows 5-10: Data
-  for (let i = 5; i <= 10; i++) {
-    const row = i - 1;
-    if (aoa[row]) {
-      const contentLength = (aoa[row][1] || '').length;
-      rowHeights[i-1] = {hpt: contentLength > 50 ? 28 : 16};
-
-      ws[SX.utils.encode_cell({r:row,c:0})].s = { font: FONT_DATA, border: BORDER_ALL,
-                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
-      ws[SX.utils.encode_cell({r:row,c:1})].s = { font: FONT_DATA, border: BORDER_ALL,
-                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+    // 제목 (첫 행)
+    if (idx === 0) {
+      ws[A].s = { font: FONT_TITLE, alignment: { horizontal:'left', vertical:'bottom' } };
+      rowHeights[idx] = { hpt: 22 };
+      expectHeader = false;
+      return;
     }
-  }
-
-  // Row 11: Empty
-  rowHeights[10] = {hpt: 14.25};
-
-  // Row 12: Section 2
-  rowHeights[11] = {hpt: 22};
-  merges.push({s:{r:11,c:0}, e:{r:11,c:1}});
-  ws['A12'].s = { font: FONT_SECTION, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}},
-                alignment: {horizontal:'left', vertical:'center'} };
-
-  // Row 13: Header
-  ws['A13'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
-                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
-  ws['B13'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
-                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
-
-  // Rows 14-16: Data
-  for (let i = 14; i <= 16; i++) {
-    const row = i - 1;
-    if (aoa[row]) {
-      const contentLength = (aoa[row][1] || '').length;
-      rowHeights[i-1] = {hpt: contentLength > 50 ? 28 : 16};
-
-      ws[SX.utils.encode_cell({r:row,c:0})].s = { font: FONT_DATA, border: BORDER_ALL,
-                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
-      ws[SX.utils.encode_cell({r:row,c:1})].s = { font: FONT_DATA, border: BORDER_ALL,
-                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+    // 빈 행 (여백)
+    if (aEmpty && bEmpty) {
+      rowHeights[idx] = { hpt: 14.25 };
+      expectHeader = false;
+      return;
     }
-  }
-
-  // Row 17: Empty
-  rowHeights[16] = {hpt: 14.25};
-
-  // Row 18: Section 3
-  rowHeights[17] = {hpt: 22};
-  merges.push({s:{r:17,c:0}, e:{r:17,c:1}});
-  ws['A18'].s = { font: FONT_SECTION, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}},
-                alignment: {horizontal:'left', vertical:'center'} };
-
-  // Row 19: Header
-  ws['A19'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
-                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
-  ws['B19'].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
-                border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
-
-  // Rows 20-22: Data
-  for (let i = 20; i <= 22; i++) {
-    const row = i - 1;
-    if (aoa[row]) {
-      const contentLength = (aoa[row][1] || '').length;
-      rowHeights[i-1] = {hpt: contentLength > 50 ? 28 : 16};
-
-      ws[SX.utils.encode_cell({r:row,c:0})].s = { font: FONT_DATA, border: BORDER_ALL,
-                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
-      ws[SX.utils.encode_cell({r:row,c:1})].s = { font: FONT_DATA, border: BORDER_ALL,
-                                                    alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+    // 섹션 제목 (예: "4. Recycling 규칙") → A:B 병합, 진한 파랑 배경
+    if (isSectionTitle(a) && bEmpty) {
+      merges.push({ s:{r:idx,c:0}, e:{r:idx,c:1} });
+      ws[A].s = { font: FONT_SECTION, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}},
+                  alignment: {horizontal:'left', vertical:'center'} };
+      ws[B].s = { fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_DARK}} };
+      rowHeights[idx] = { hpt: 22 };
+      expectHeader = true;
+      return;
     }
-  }
+    // 컬럼 헤더 (섹션 제목 바로 다음 행) → 연한 파랑 배경 + 테두리
+    if (expectHeader) {
+      const hStyle = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                       border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+      ws[A].s = hStyle;
+      ws[B].s = { font: FONT_HEADER, fill: {patternType:'solid', fgColor:{rgb:COLOR_BLUE_LIGHT}},
+                  border: BORDER_ALL, alignment: {horizontal:'center', vertical:'center'} };
+      rowHeights[idx] = { hpt: 16 };
+      expectHeader = false;
+      return;
+    }
+    // 데이터 행 → 테두리 + 좌측/상단 정렬 + 자동 줄바꿈
+    const contentLength = String(b ?? '').length;
+    rowHeights[idx] = { hpt: contentLength > 50 ? 28 : 16 };
+    ws[A].s = { font: FONT_DATA, border: BORDER_ALL, alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+    ws[B].s = { font: FONT_DATA, border: BORDER_ALL, alignment: {horizontal:'left', vertical:'top', wrapText:true} };
+  });
 
   ws['!merges'] = merges;
-  ws['!rows'] = Object.keys(rowHeights).map(k => rowHeights[parseInt(k)]);
+  ws['!rows'] = rowHeights;
 
   return ws;
 }
@@ -1636,4 +1737,9 @@ function showToast(msg) {
   t.textContent=msg; t.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer=setTimeout(()=>t.classList.remove('show'),2800);
+}
+
+// 시작 시 커밋된 오버라이드/개인 편집 규칙 적용 (없으면 내장 기본값 유지)
+if (typeof window !== 'undefined' && typeof spInitOverrides === 'function') {
+  spInitOverrides();
 }
